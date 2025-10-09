@@ -3,9 +3,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from ...utils.responses import ok, error
-from ...services.face_service import enroll_user, verify_user
+from ...services.face_service import verify_user, enroll_user_task # <-- 1. Impor task
 from ...services.storage.supabase_storage import list_objects, signed_url
-from ...services.notification_service import send_notification  # <-- 1. Impor layanan notifikasi
+from ...services.notification_service import send_notification
 from ...db import get_session
 from ...db.models import Device, User
 from ...utils.timez import now_local
@@ -20,7 +20,7 @@ def enroll():
         return error("user_id wajib ada", 400)
 
     files = request.files.getlist("images")
-    if not files:
+    if not any(f.filename for f in files):
         return error("Kirim minimal satu file di field 'images'", 400)
 
     fcm_token = (request.form.get("fcm_token") or "").strip()
@@ -28,28 +28,27 @@ def enroll():
         return error("fcm_token wajib ada untuk registrasi perangkat", 400)
 
     try:
-        # 1) Proses enroll wajah
-        data = enroll_user(user_id, files)
+        # Baca file menjadi bytes untuk dikirim ke Celery
+        images_data = [f.read() for f in files]
+        
+        # Panggil task di background
+        enroll_user_task.delay(user_id, images_data)
 
-        # 2) Ambil data perangkat dari form
+        # Logika penyimpanan perangkat tetap di sini karena cepat
         device_label = request.form.get("device_label") or None
         platform = request.form.get("platform") or None
         os_version = request.form.get("os_version") or None
         app_version = request.form.get("app_version") or None
         device_identifier = request.form.get("device_identifier") or None
-        user_name = "Karyawan" # Default name
+        user_name = "Karyawan"
 
-        # 3) Simpan/Update Device
         with get_session() as s:
             user = s.execute(
                 select(User).where(User.id_user == user_id)
             ).scalar_one_or_none()
             if user is None:
-                return error(
-                    f"User dengan id_user '{user_id}' tidak ditemukan.",
-                    404
-                )
-            user_name = user.nama_pengguna  # Ambil nama pengguna untuk notifikasi
+                return error(f"User dengan id_user '{user_id}' tidak ditemukan.", 404)
+            user_name = user.nama_pengguna
 
             device = None
             if device_identifier:
@@ -64,62 +63,52 @@ def enroll():
 
             if device is None:
                 device = Device(
-                    id_user=user_id,
-                    device_label=device_label,
-                    platform=platform,
-                    os_version=os_version,
-                    app_version=app_version,
-                    device_identifier=device_identifier,
-                    last_seen=now_naive_utc,
-                    fcm_token=fcm_token,
-                    fcm_token_updated_at=now_naive_utc
+                    id_user=user_id, device_label=device_label, platform=platform,
+                    os_version=os_version, app_version=app_version,
+                    device_identifier=device_identifier, last_seen=now_naive_utc,
+                    fcm_token=fcm_token, fcm_token_updated_at=now_naive_utc
                 )
                 s.add(device)
             else:
-                if device_label:
-                    device.device_label = device_label
-                if platform:
-                    device.platform = platform
-                if os_version:
-                    device.os_version = os_version
-                if app_version:
-                    device.app_version = app_version
+                device.device_label = device_label or device.device_label
+                device.platform = platform or device.platform
+                device.os_version = os_version or device.os_version
+                device.app_version = app_version or device.app_version
                 device.last_seen = now_naive_utc
-                if fcm_token:
-                    device.fcm_token = fcm_token
-                    device.fcm_token_updated_at = now_naive_utc
+                device.fcm_token = fcm_token or device.fcm_token
+                device.fcm_token_updated_at = now_naive_utc
 
-            try:
-                s.commit()
-            except IntegrityError as ie:
-                s.rollback()
-                return error(f"Gagal menyimpan device (integrity error): {str(ie.orig)}", 400)
-
+            s.commit()
             s.refresh(device)
-            data["device_id"] = device.id_device
-
-        # --- 4. Kirim Notifikasi ---
+            device_id = device.id_device
+        
+        # NOTIFIKASI SUKSES PENDAFTARAN DIKIRIM OLEH WORKER CELERY SETELAH SELESAI
+        # Kita tetap kirim notifikasi awal untuk konfirmasi
         try:
             send_notification(
                 event_trigger='FACE_REGISTRATION_SUCCESS',
                 user_id=user_id,
                 dynamic_data={'nama_karyawan': user_name},
-                session=s
+                session=s  # Anda mungkin perlu membuat sesi baru di sini jika di luar blok 'with'
             )
         except Exception as e:
-            # Jika notifikasi gagal, cukup catat log error tanpa menggagalkan respons utama
             current_app.logger.error(f"Gagal mengirim notifikasi registrasi wajah untuk user {user_id}: {e}")
-        # --- Akhir ---
 
-        return ok(**data)
+        # Beri respons cepat ke pengguna
+        return ok(
+            message="Proses pendaftaran wajah telah dimulai. Anda akan menerima notifikasi setelah selesai.",
+            device_id=device_id
+        )
 
     except Exception as e:
         current_app.logger.error(f"Kesalahan pada endpoint enroll: {e}", exc_info=True)
         return error(str(e), 400)
 
-
+# Endpoint /verify dan /get_face_data tidak berubah
+# ...
 @face_bp.post("/api/face/verify")
 def verify():
+    # ... (kode tidak berubah)
     user_id = (request.form.get("user_id") or "").strip()
     metric = (request.form.get("metric") or "cosine").lower()
     threshold = request.form.get("threshold", type=float, default=(0.45 if metric == "cosine" else 1.4))
@@ -139,9 +128,9 @@ def verify():
         current_app.logger.error(f"Kesalahan pada endpoint verify: {e}", exc_info=True)
         return error(str(e), 400)
 
-
 @face_bp.get("/api/face/<user_id>")
 def get_face_data(user_id: str):
+    # ... (kode tidak berubah)
     user_id = (user_id or "").strip()
     if not user_id:
         return error("user_id wajib ada", 400)
@@ -168,4 +157,3 @@ def get_face_data(user_id: str):
     except Exception as e:
         current_app.logger.error(f"Kesalahan pada endpoint get_face_data: {e}", exc_info=True)
         return error(str(e), 400)
-

@@ -17,6 +17,10 @@ class BaseConfig:
     # Flask
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024
     JSON_SORT_KEYS = False
+    
+    # Celery Configuration (BARU)
+    CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+    CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 
 class DevConfig(BaseConfig):
     DEBUG = True
@@ -25,7 +29,6 @@ class ProdConfig(BaseConfig):
     DEBUG = False
 
 def load_config(app):
-
     env = os.getenv("FLASK_ENV", "development").lower()
     if env == "production":
         app.config.from_object(ProdConfig)

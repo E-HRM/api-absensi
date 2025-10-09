@@ -1,13 +1,14 @@
 # flask_api_face/app/blueprints/absensi/routes.py
 
-from datetime import datetime, date as _date, timezone # <-- TAMBAHAN: import timezone
+from datetime import datetime, date as _date, timezone
 from flask import Blueprint, request, current_app
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload # <-- 1. Impor joinedload
 from ...utils.responses import ok, error
 from ...utils.geo import haversine_m
 from ...utils.timez import now_local, today_local_date
 from ...services.face_service import verify_user
-from ...services.notification_service import send_notification  # BARU
+from ...services.notification_service import send_notification
 from ...db import get_session
 from ...db.models import (
     Location,
@@ -24,8 +25,8 @@ from ...db.models import (
     PolaKerja,
     Istirahat,
 )
-        
-absensi_bp = Blueprint("absensi", __name__) 
+
+absensi_bp = Blueprint("absensi", __name__)
 
 # ---------- helpers ----------
 def _get_radius(loc: Location) -> int:
@@ -213,12 +214,17 @@ def checkin():
             jam_masuk_seharusnya = None  # simpan jam masuk dari pola kerja jika ada
 
             if nama_hari_ini:
-                jadwal_kerja = s.query(ShiftKerja).join(PolaKerja).filter(
+                # --- PERUBAHAN DI SINI ---
+                # Gunakan joinedload untuk mengambil PolaKerja dalam satu kueri yang efisien
+                jadwal_kerja = s.query(ShiftKerja).options(
+                    joinedload(ShiftKerja.polaKerja)
+                ).filter(
                     ShiftKerja.id_user == user_id,
                     ShiftKerja.tanggal_mulai <= today,
                     ShiftKerja.tanggal_selesai >= today,
                     ShiftKerja.hari_kerja.contains(nama_hari_ini)
                 ).first()
+                # --- AKHIR PERUBAHAN ---
 
             if jadwal_kerja and jadwal_kerja.polaKerja and jadwal_kerja.polaKerja.jam_mulai:
                 # Ambil jam masuk seharusnya (waktu lokal) untuk kebutuhan notifikasi
