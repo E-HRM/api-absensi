@@ -1,3 +1,5 @@
+# flask_api_face/app/config.py
+
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -18,9 +20,9 @@ class BaseConfig:
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024
     JSON_SORT_KEYS = False
     
-    # Celery Configuration (BARU)
-    CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-    CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+    # Celery Configuration (use new style keys)
+    broker_url = os.getenv('broker_url', os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
+    result_backend = os.getenv('result_backend', os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0'))
 
 class DevConfig(BaseConfig):
     DEBUG = True

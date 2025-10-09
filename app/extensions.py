@@ -1,97 +1,201 @@
-from typing import Optional
-from flask import current_app
-from flask_cors import CORS
-from celery import Celery # <-- Impor Celery
+# flask_api_face/app/extensions.py
+
+from __future__ import annotations
+
 import os
+import json
+from typing import Optional
+
+from flask import Flask, current_app
+from flask_cors import CORS
+from celery import Celery, Task
 
 from supabase import create_client, Client
 from insightface.app import FaceAnalysis
 import firebase_admin
 from firebase_admin import credentials
-import json
 
-# Buat instance ekstensi di tingkat global
-cors = CORS()
-celery = Celery(__name__, broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'), backend=os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')) # <-- Buat instance Celery di sini
+# --- Windows + multiprocessing quirk ---
+if os.name == "nt":
+    os.environ.setdefault("FORKED_BY_MULTIPROCESSING", "1")
 
-# Variabel global untuk klien/engine yang diinisialisasi sekali
+# --- Globals ---
+celery: Celery = Celery(__name__)
+_face_engine: Optional[FaceAnalysis] = None
 _supabase: Optional[Client] = None
-_engine: Optional[FaceAnalysis] = None
-_firebase_app = None
+_firebase_app: Optional[firebase_admin.App] = None
 
-def init_supabase(app):
-    """Menginisialisasi dan menyimpan klien Supabase."""
+
+# -------------------------
+# Celery <-> Flask binding
+# -------------------------
+class FlaskContextTask(Task):
+    """
+    Memastikan setiap task berjalan di dalam Flask app_context.
+    Gunakan atribut 'flask_app' agar tidak bentrok dengan Task.app (Celery app).
+    """
+    flask_app: Optional[Flask] = None  # <-- penting: JANGAN pakai nama 'app' atau '_app'
+
+    def __call__(self, *args, **kwargs):
+        app_obj = getattr(self, "flask_app", None)
+
+        # Jika belum ada, coba ambil dari current_app bila tersedia
+        if app_obj is None:
+            try:
+                app_obj = current_app._get_current_object()  # type: ignore
+            except Exception:
+                app_obj = None
+
+        if app_obj is not None:
+            with app_obj.app_context():
+                return self.run(*args, **kwargs)
+        # fallback terakhir tanpa context (seharusnya jarang terjadi)
+        return self.run(*args, **kwargs)
+
+
+def init_celery(app: Flask) -> None:
+    """Konfigurasi Celery dan pasang Task base yang membawa app_context Flask."""
+    broker = app.config.get("CELERY_BROKER_URL")
+    backend = app.config.get("CELERY_RESULT_BACKEND")
+
+    celery.conf.update(
+        broker_url=broker,
+        result_backend=backend,
+        task_serializer="json",
+        accept_content=["json"],
+        result_serializer="json",
+        timezone=app.config.get("TIMEZONE", "UTC"),
+        enable_utc=False,
+    )
+
+    # Pasang Task base & injeksikan Flask app dengan nama atribut yang tidak bentrok
+    celery.Task = FlaskContextTask  # type: ignore
+    FlaskContextTask.flask_app = app  # type: ignore
+
+
+# -------------------------
+# Face engine (insightface)
+# -------------------------
+def init_face_engine(app: Flask) -> None:
+    """Eager init: dipanggil saat worker start. Aman dipanggil berulang."""
+    global _face_engine
+    if _face_engine is not None:
+        return
+
+    model_name = app.config.get("MODEL_NAME", "buffalo_l")
+    providers = app.config.get("ONNX_PROVIDERS") or ["CPUExecutionProvider"]
+
+    try:
+        engine = FaceAnalysis(name=model_name, providers=providers)
+        engine.prepare(ctx_id=0, det_size=(256, 256))
+        _face_engine = engine
+        app.logger.info(f"Face engine '{model_name}' initialized with providers={providers}")
+    except Exception as e:
+        _face_engine = None
+        app.logger.error(f"Gagal inisialisasi FaceAnalysis: {e}", exc_info=True)
+
+
+def get_face_engine() -> FaceAnalysis:
+    """Lazy getter: kalau belum ada, coba init dari current_app."""
+    global _face_engine
+    if _face_engine is None:
+        try:
+            app = current_app._get_current_object()  # type: ignore
+        except Exception:
+            app = None
+
+        if app is not None:
+            init_face_engine(app)
+
+    if _face_engine is None:
+        raise RuntimeError("Face recognition engine not initialized. "
+                           "Pastikan worker Celery memanggil init_face_engine() "
+                           "atau jalankan task dalam konteks Flask dengan init_celery().")
+    return _face_engine
+
+
+# -------------------------
+# Supabase
+# -------------------------
+def init_supabase(app: Flask) -> None:
     global _supabase
+    if _supabase is not None:
+        return
+
     url = app.config.get("SUPABASE_URL")
     key = app.config.get("SUPABASE_SERVICE_ROLE_KEY")
-    if url and key:
+
+    if not url or not key:
+        app.logger.warning("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY tidak di-set.")
+        return
+
+    try:
         _supabase = create_client(url, key)
-    else:
-        print("Peringatan: Kredensial Supabase tidak ditemukan.")
+        app.logger.info("Supabase client initialized.")
+    except Exception as e:
+        _supabase = None
+        app.logger.error(f"Gagal inisialisasi Supabase: {e}", exc_info=True)
+
 
 def get_supabase() -> Optional[Client]:
     return _supabase
 
-def init_face_engine(app):
-    """Menginisialisasi mesin pengenalan wajah."""
-    global _engine
-    model = app.config.get("MODEL_NAME", "buffalo_l")
-    engine = FaceAnalysis(name=model, providers=["CPUExecutionProvider"])
-    engine.prepare(ctx_id=0)
-    _engine = engine
-    print(f"Mesin pengenalan wajah diinisialisasi dengan model: {model}")
 
-def get_face_engine() -> FaceAnalysis:
-    if _engine is None:
-        # Inisialisasi darurat jika belum diinisialisasi
-        init_face_engine(current_app)
-    return _engine
-
-def init_firebase(app):
-    """Menginisialisasi Firebase Admin SDK dengan logika yang lebih baik."""
+# -------------------------
+# Firebase Admin
+# -------------------------
+def init_firebase(app: Flask) -> None:
+    """Inisialisasi Firebase Admin dari path JSON atau env JSON."""
     global _firebase_app
-    if firebase_admin._apps:
-        _firebase_app = firebase_admin.get_app()
+    if _firebase_app is not None:
         return
 
     cred = None
     creds_path = app.config.get("FIREBASE_CREDENTIALS_PATH")
     creds_json_str = app.config.get("FIREBASE_SERVICE_ACCOUNT_JSON")
 
-    # Prioritas 1: Coba muat dari path file jika ada
-    if creds_path:
-        # Pastikan path file benar, relatif terhadap direktori utama proyek
-        if os.path.exists(creds_path):
-            try:
-                cred = credentials.Certificate(creds_path)
-                print(f"Memuat kredensial Firebase dari path: {creds_path}")
-            except Exception as e:
-                print(f"Peringatan: Gagal memuat kredensial dari file di path {creds_path}: {e}")
-        else:
-            print(f"Peringatan: File kredensial Firebase tidak ditemukan di path yang ditentukan: {creds_path}")
-
-    # Prioritas 2: Coba muat dari JSON string jika path gagal atau tidak ada
-    if not cred and creds_json_str:
+    if creds_path and os.path.exists(creds_path):
         try:
-            # Pastikan string tidak kosong dan merupakan JSON yang valid
-            if creds_json_str.strip().startswith('{'):
+            cred = credentials.Certificate(creds_path)
+            app.logger.info(f"Loading Firebase credentials from path: {creds_path}")
+        except Exception as e:
+            app.logger.warning(f"Failed to load Firebase credentials from path {creds_path}: {e}")
+
+    if cred is None and creds_json_str:
+        try:
+            if creds_json_str.strip().startswith("{"):
                 cred_dict = json.loads(creds_json_str)
                 cred = credentials.Certificate(cred_dict)
-                print("Memuat kredensial Firebase dari variabel lingkungan FIREBASE_SERVICE_ACCOUNT_JSON.")
+                app.logger.info("Loading Firebase credentials from FIREBASE_SERVICE_ACCOUNT_JSON.")
             else:
-                # Ini akan menangani kasus di mana variabel berisi email atau teks lain
-                print("Peringatan: FIREBASE_SERVICE_ACCOUNT_JSON tidak berisi string JSON yang valid.")
-        except json.JSONDecodeError as e:
-            print(f"Peringatan: Gagal mem-parsing FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+                app.logger.warning("FIREBASE_SERVICE_ACCOUNT_JSON bukan JSON valid.")
         except Exception as e:
-            print(f"Peringatan: Gagal memuat kredensial dari FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+            app.logger.warning(f"Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
 
-    # Inisialisasi aplikasi jika kredensial berhasil dimuat
     if cred:
         try:
             _firebase_app = firebase_admin.initialize_app(cred)
-            print("Firebase Admin SDK berhasil diinisialisasi.")
+            app.logger.info("Firebase Admin SDK initialized.")
         except Exception as e:
-            print(f"Error saat menginisialisasi Firebase Admin SDK: {e}")
+            _firebase_app = None
+            app.logger.error(f"Error initializing Firebase Admin SDK: {e}", exc_info=True)
     else:
-        print("Peringatan: Tidak ada kredensial Firebase yang valid ditemukan. Notifikasi push dinonaktifkan.")
+        app.logger.warning("No valid Firebase credentials found; Firebase not initialized.")
+
+
+# -------------------------
+# Flask app wiring
+# -------------------------
+def init_app(app: Flask) -> None:
+    """Dipanggil dari create_app()."""
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+    # Binding Celery ke Flask (dan Task base with app_context)
+    init_celery(app)
+
+    # Komponen lain yang ringan
+    init_supabase(app)
+    try:
+        init_firebase(app)
+    except Exception:
+        app.logger.exception("Firebase init failed during app init.")

@@ -161,7 +161,7 @@ def _agendas_payload_for_absensi(session, absensi_id: str, id_only: bool = False
 
 # ---------- routes absensi (checkin/checkout/status) ----------
 
-@absensi_bp.post("/api/absensi/checkin")
+@absensi_bp.post("/checkin")
 def checkin():
     user_id = (request.form.get("user_id") or "").strip()
     loc_id = (request.form.get("location_id") or "").strip()
@@ -316,7 +316,7 @@ def checkin():
             return error(f"Terjadi kesalahan internal: {str(e)}", 500)
 
 
-@absensi_bp.post("/api/absensi/checkout")
+@absensi_bp.post("/checkout")
 def checkout():
     user_id = (request.form.get("user_id") or "").strip()
     loc_id = (request.form.get("location_id") or "").strip()
@@ -435,7 +435,7 @@ def checkout():
             return error(f"Terjadi kesalahan internal saat checkout: {str(e)}", 500)
 
 
-@absensi_bp.get("/api/absensi/status")
+@absensi_bp.get("/status")
 def absensi_status():
     user_id = (request.args.get("user_id") or "").strip()
     if not user_id:
@@ -472,7 +472,7 @@ def absensi_status():
 
 # --- ENDPOINT BARU UNTUK FITUR ISTIRAHAT ---
 
-@absensi_bp.post("/api/absensi/istirahat/start")
+@absensi_bp.post("/istirahat/start")
 def start_istirahat():
     user_id = (request.form.get("user_id") or "").strip()
     lat = request.form.get("start_istirahat_latitude", type=float)  
@@ -547,7 +547,7 @@ def start_istirahat():
             s.rollback()
             return error(f"Terjadi kesalahan: {str(e)}", 500)
 
-@absensi_bp.post("/api/absensi/istirahat/end")
+@absensi_bp.post("/istirahat/end")
 def end_istirahat():
     user_id = (request.form.get("user_id") or "").strip()
     lat = request.form.get("end_istirahat_latitude", type=float)
@@ -596,7 +596,7 @@ def end_istirahat():
 
 
 # --- PERUBAHAN UTAMA DI SINI ---
-@absensi_bp.get("/api/absensi/istirahat/status")
+@absensi_bp.get("/istirahat/status")
 def istirahat_status():
     user_id = (request.args.get("user_id") or "").strip()
     if not user_id:
