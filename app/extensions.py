@@ -1,16 +1,18 @@
 from typing import Optional
 from flask import current_app
 from flask_cors import CORS
+from celery import Celery # <-- Impor Celery
+import os
 
 from supabase import create_client, Client
 from insightface.app import FaceAnalysis
 import firebase_admin
 from firebase_admin import credentials
 import json
-import os # <-- Tambahkan import 'os'
 
 # Buat instance ekstensi di tingkat global
 cors = CORS()
+celery = Celery(__name__, broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'), backend=os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')) # <-- Buat instance Celery di sini
 
 # Variabel global untuk klien/engine yang diinisialisasi sekali
 _supabase: Optional[Client] = None

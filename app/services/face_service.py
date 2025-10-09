@@ -3,12 +3,10 @@ import time
 import numpy as np
 import cv2
 
-from ..extensions import get_face_engine
+from ..extensions import get_face_engine, celery # <-- 1. Impor dari extensions
 from .storage.supabase_storage import upload_bytes, signed_url, download, list_objects
-from ..celery_utils import celery # <-- 1. Impor instance Celery
 
-# Fungsi helper seperti _now_ts, _normalize, _cosine, dll. tetap sama
-# ...
+# ... (sisa kode helper tidak berubah) ...
 def _now_ts() -> int:
     return int(time.time())
 
@@ -35,7 +33,6 @@ def _is_match(score: float, metric: str, threshold: float) -> bool:
     return score >= threshold if metric == "cosine" else score <= threshold
 
 def decode_image(file_storage):
-    # Disesuaikan agar bisa menerima bytes atau objek FileStorage
     if isinstance(file_storage, bytes):
         data = file_storage
     else:
@@ -59,16 +56,12 @@ def _user_root(user_id: str) -> str:
     if not user_id:
         raise ValueError("user_id kosong")
     return f"face_detection/{user_id}"
-# ...
 
 # -------- public services --------
 
 @celery.task(name='tasks.enroll_user_task')
 def enroll_user_task(user_id: str, images_data: list[bytes]):
-    """
-    Versi 'enroll_user' yang berjalan sebagai background task.
-    Menerima data gambar dalam bentuk bytes.
-    """
+    # ... (kode task ini tidak berubah) ...
     try:
         embeddings = []
         uploaded = []
@@ -90,8 +83,6 @@ def enroll_user_task(user_id: str, images_data: list[bytes]):
             embeddings.append(emb)
 
         if not embeddings:
-            # Gagal memproses semua gambar
-            # Di sini Anda bisa menambahkan logika notifikasi kegagalan
             return {"status": "error", "message": "Tidak ada wajah yang terdeteksi di semua gambar."}
 
         mean_emb = _normalize(np.stack(embeddings, axis=0).mean(axis=0))
@@ -99,11 +90,6 @@ def enroll_user_task(user_id: str, images_data: list[bytes]):
         np.save(emb_io, mean_emb)
         emb_key = f"{_user_root(user_id)}/embedding.npy"
         upload_bytes(emb_key, emb_io.getvalue(), "application/octet-stream")
-        
-        # Di sini Anda dapat memicu notifikasi keberhasilan
-        # Contoh: memanggil task lain untuk mengirim notifikasi
-        # from .notification_service import send_notification_task
-        # send_notification_task.delay(...)
 
         return {
             "status": "success",
@@ -115,14 +101,14 @@ def enroll_user_task(user_id: str, images_data: list[bytes]):
         print(f"Error dalam enroll_user_task untuk user {user_id}: {e}")
         return {"status": "error", "message": str(e)}
 
-# Fungsi verify_user tetap sama karena harus sinkron (memberi respons langsung)
+
 def verify_user(
     user_id: str,
     probe_file,
     metric: str = "cosine",
     threshold: float = 0.45,
 ):
-    # ... (kode verify_user tidak berubah)
+    # ... (kode verify_user tidak berubah) ...
     probe_img = decode_image(probe_file)
     probe_emb = get_embedding(probe_img)
     if probe_emb is None:

@@ -2,7 +2,7 @@
 
 from flask import Flask
 from .config import load_config
-from .extensions import cors, init_supabase, init_face_engine, init_firebase
+from .extensions import cors, init_supabase, init_face_engine, init_firebase, celery # <-- Impor celery
 from .middleware.error_handlers import register_error_handlers
 from .blueprints.face.routes import face_bp
 from .blueprints.absensi.routes import absensi_bp
@@ -15,6 +15,15 @@ def create_app():
     
     # Inisialisasi ekstensi dengan app
     cors.init_app(app)
+
+    # --- Pengikatan Celery ke Konteks Aplikasi (BARU) ---
+    celery.conf.update(app.config)
+    class ContextTask(celery.Task):
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+    celery.Task = ContextTask
+    # --------------------------------------------------
 
     # Inisialisasi layanan
     init_supabase(app)

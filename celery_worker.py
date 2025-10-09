@@ -1,9 +1,8 @@
 from app import create_app
-from app.celery_utils import make_celery
+from app.extensions import celery # <-- Impor dari app.extensions
 
 app = create_app()
-celery = make_celery(app)
+app.app_context().push()
 
 # Impor task Anda di sini agar worker dapat menemukannya
-# Pastikan semua file yang berisi @celery.task diimpor.
 from app.services.face_service import enroll_user_task
