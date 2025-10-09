@@ -8,4 +8,5 @@ numpy
 supabase
 SQLAlchemy
 PyMySQL
+firebase-admin 
 cryptography>=42,<45
