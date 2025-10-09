@@ -1,9 +1,12 @@
 # flask_api_face/app/blueprints/absensi/routes.py
 
+from __future__ import annotations
+
 from datetime import datetime, date as _date, timezone
 from flask import Blueprint, request, current_app
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload # <-- 1. Impor joinedload
+from sqlalchemy.orm import joinedload
+
 from ...utils.responses import ok, error
 from ...utils.geo import haversine_m
 from ...utils.timez import now_local, today_local_date
@@ -29,12 +32,14 @@ from ...db.models import (
 absensi_bp = Blueprint("absensi", __name__)
 
 # ---------- helpers ----------
+
 def _get_radius(loc: Location) -> int:
     r = loc.radius if loc and loc.radius is not None else current_app.config.get("DEFAULT_GEOFENCE_RADIUS", 100)
     try:
         return int(r)
     except Exception:
         return 100
+
 
 def _extract_agenda_kerja_ids(req) -> list[str]:
     """
@@ -51,6 +56,7 @@ def _extract_agenda_kerja_ids(req) -> list[str]:
     max_items = int(current_app.config.get("MAX_AGENDA_LINK_PER_REQUEST", 50))
     return cleaned[:max_items]
 
+
 def _extract_recipients(req) -> list[str]:
     """
     Ambil banyak field 'recipient' (multipart) berisi id_user yang dituju.
@@ -64,6 +70,7 @@ def _extract_recipients(req) -> list[str]:
             seen.add(x)
     max_rcp = int(current_app.config.get("MAX_RECIPIENTS_PER_REQUEST", 20))
     return cleaned[:max_rcp]
+
 
 def _extract_catatan_entries(req) -> list[dict[str, str | None]]:
     """Kumpulkan pasangan deskripsi dan lampiran dari permintaan multipart."""
@@ -90,6 +97,7 @@ def _extract_catatan_entries(req) -> list[dict[str, str | None]]:
             break
     return entries
 
+
 def _map_to_atasan_role(user: User) -> AtasanRole | None:
     """
     Snapshot role penerima sesuai enum AtasanRole (HR/OPERASIONAL/DIREKTUR).
@@ -104,6 +112,7 @@ def _map_to_atasan_role(user: User) -> AtasanRole | None:
     if user.role == Role.DIREKTUR:
         return AtasanRole.DIREKTUR
     return None
+
 
 def _link_agendas_to_absensi(session, user_id: str, absensi_id: str, agenda_ids: list[str]) -> tuple[int, int]:
     """
@@ -132,6 +141,7 @@ def _link_agendas_to_absensi(session, user_id: str, absensi_id: str, agenda_ids:
             skipped += 1
     return updated, skipped
 
+
 def _agendas_payload_for_absensi(session, absensi_id: str, id_only: bool = False) -> list:
     """Ambil semua agenda_kerja yang sudah tertaut ke absensi tertentu."""
     rows = (
@@ -140,7 +150,7 @@ def _agendas_payload_for_absensi(session, absensi_id: str, id_only: bool = False
         .order_by(AgendaKerja.created_at.asc())
         .all()
     )
-    
+
     if id_only:
         return [r.id_agenda_kerja for r in rows]
 
@@ -214,17 +224,18 @@ def checkin():
             jam_masuk_seharusnya = None  # simpan jam masuk dari pola kerja jika ada
 
             if nama_hari_ini:
-                # --- PERUBAHAN DI SINI ---
-                # Gunakan joinedload untuk mengambil PolaKerja dalam satu kueri yang efisien
-                jadwal_kerja = s.query(ShiftKerja).options(
-                    joinedload(ShiftKerja.polaKerja)
-                ).filter(
-                    ShiftKerja.id_user == user_id,
-                    ShiftKerja.tanggal_mulai <= today,
-                    ShiftKerja.tanggal_selesai >= today,
-                    ShiftKerja.hari_kerja.contains(nama_hari_ini)
-                ).first()
-                # --- AKHIR PERUBAHAN ---
+                # gunakan joinedload agar akses polaKerja tidak n+1
+                jadwal_kerja = (
+                    s.query(ShiftKerja)
+                    .options(joinedload(ShiftKerja.polaKerja))
+                    .filter(
+                        ShiftKerja.id_user == user_id,
+                        ShiftKerja.tanggal_mulai <= today,
+                        ShiftKerja.tanggal_selesai >= today,
+                        ShiftKerja.hari_kerja.contains(nama_hari_ini),
+                    )
+                    .first()
+                )
 
             if jadwal_kerja and jadwal_kerja.polaKerja and jadwal_kerja.polaKerja.jam_mulai:
                 # Ambil jam masuk seharusnya (waktu lokal) untuk kebutuhan notifikasi
@@ -232,7 +243,7 @@ def checkin():
                 jam_checkin_aktual = now_dt.time()
                 if jam_checkin_aktual > jam_masuk_seharusnya:
                     status_kehadiran = AbsensiStatus.terlambat
-            
+
             rec = Absensi(
                 id_user=user_id,
                 face_verified_masuk=True,
@@ -245,7 +256,7 @@ def checkin():
                 in_longitude=lng,
             )
             s.add(rec)
-            
+
             s.flush()
 
             catatan_payload: list[dict[str, str | None]] = []
@@ -260,18 +271,40 @@ def checkin():
                     s.add(row)
                     catatan_rows.append(row)
                 s.flush()
-                catatan_payload = [{"id_catatan": row.id_catatan, "deskripsi_catatan": row.deskripsi_catatan, "lampiran_url": row.lampiran_url} for row in catatan_rows]
+                catatan_payload = [
+                    {
+                        "id_catatan": row.id_catatan,
+                        "deskripsi_catatan": row.deskripsi_catatan,
+                        "lampiran_url": row.lampiran_url,
+                    }
+                    for row in catatan_rows
+                ]
 
             linked_count, skipped_count = _link_agendas_to_absensi(s, user_id, rec.id_absensi, agenda_ids)
 
             added_rcp = 0
             if recipients:
-                existing = {r[0] for r in s.query(AbsensiReportRecipient.id_user).filter(AbsensiReportRecipient.id_absensi == rec.id_absensi).all()}
+                existing = {
+                    r[0]
+                    for r in s.query(AbsensiReportRecipient.id_user)
+                    .filter(AbsensiReportRecipient.id_absensi == rec.id_absensi)
+                    .all()
+                }
                 for rid in recipients:
-                    if rid in existing: continue
+                    if rid in existing:
+                        continue
                     u = s.get(User, rid)
-                    if u is None: continue
-                    s.add(AbsensiReportRecipient(id_absensi=rec.id_absensi, id_user=rid, recipient_nama_snapshot=u.nama_pengguna, recipient_role_snapshot=_map_to_atasan_role(u), status=ReportStatus.terkirim))
+                    if u is None:
+                        continue
+                    s.add(
+                        AbsensiReportRecipient(
+                            id_absensi=rec.id_absensi,
+                            id_user=rid,
+                            recipient_nama_snapshot=u.nama_pengguna,
+                            recipient_role_snapshot=_map_to_atasan_role(u),
+                            status=ReportStatus.terkirim,
+                        )
+                    )
                     added_rcp += 1
 
             s.commit()
@@ -281,7 +314,6 @@ def checkin():
                 user = s.get(User, user_id)
                 if user:
                     if status_kehadiran == AbsensiStatus.terlambat:
-                        # Notifikasi terlambat masuk
                         dyn = {
                             "nama_karyawan": user.nama_pengguna,
                             "waktu_checkin": now_dt.strftime("%H:%M"),
@@ -289,14 +321,13 @@ def checkin():
                         }
                         send_notification("LATE_CHECK_IN", user_id, dyn, s)
                     else:
-                        # Notifikasi sukses check-in
                         dyn = {
                             "nama_karyawan": user.nama_pengguna,
                             "waktu_checkin": now_dt.strftime("%H:%M"),
                         }
                         send_notification("SUCCESS_CHECK_IN", user_id, dyn, s)
             except Exception:
-                # Jika terjadi error saat mengirim notifikasi, jangan gagalkan proses absensi
+                # Jangan gagalkan proses jika notifikasi gagal
                 pass
 
             return ok(
@@ -340,7 +371,11 @@ def checkout():
     with get_session() as s:
         try:
             today = today_local_date()
-            rec = s.query(Absensi).filter(Absensi.id_user == user_id, Absensi.tanggal == today).one_or_none()
+            rec = (
+                s.query(Absensi)
+                .filter(Absensi.id_user == user_id, Absensi.tanggal == today)
+                .one_or_none()
+            )
 
             if rec is None:
                 return error("Belum ada check-in untuk hari ini.", 404)
@@ -370,7 +405,12 @@ def checkout():
             rec.out_longitude = lng
             rec.face_verified_pulang = True
 
-            existing_catatan = s.query(Catatan).filter(Catatan.id_absensi == rec.id_absensi).order_by(Catatan.id_catatan.asc()).all()
+            existing_catatan = (
+                s.query(Catatan)
+                .filter(Catatan.id_absensi == rec.id_absensi)
+                .order_by(Catatan.id_catatan.asc())
+                .all()
+            )
             kept_rows: list[Catatan] = []
 
             if catatan_entries:
@@ -380,29 +420,55 @@ def checkout():
                         row.deskripsi_catatan = entry["deskripsi_catatan"]
                         row.lampiran_url = entry["lampiran_url"]
                     else:
-                        row = Catatan(id_absensi=rec.id_absensi, deskripsi_catatan=entry["deskripsi_catatan"], lampiran_url=entry["lampiran_url"])
+                        row = Catatan(
+                            id_absensi=rec.id_absensi,
+                            deskripsi_catatan=entry["deskripsi_catatan"],
+                            lampiran_url=entry["lampiran_url"],
+                        )
                         s.add(row)
                     kept_rows.append(row)
-                for row in existing_catatan[len(catatan_entries):]:
+                for row in existing_catatan[len(catatan_entries) :]:
                     s.delete(row)
             else:
                 kept_rows = list(existing_catatan)
-            
+
             s.flush()
 
-            catatan_payload = [{"id_catatan": row.id_catatan, "deskripsi_catatan": row.deskripsi_catatan, "lampiran_url": row.lampiran_url} for row in kept_rows]
-            
+            catatan_payload = [
+                {
+                    "id_catatan": row.id_catatan,
+                    "deskripsi_catatan": row.deskripsi_catatan,
+                    "lampiran_url": row.lampiran_url,
+                }
+                for row in kept_rows
+            ]
+
             linked_count, skipped_count = _link_agendas_to_absensi(s, user_id, rec.id_absensi, agenda_ids)
             agendas_payload = _agendas_payload_for_absensi(s, rec.id_absensi)
 
             added_rcp = 0
             if recipients:
-                existing = {r[0] for r in s.query(AbsensiReportRecipient.id_user).filter(AbsensiReportRecipient.id_absensi == rec.id_absensi).all()}
+                existing = {
+                    r[0]
+                    for r in s.query(AbsensiReportRecipient.id_user)
+                    .filter(AbsensiReportRecipient.id_absensi == rec.id_absensi)
+                    .all()
+                }
                 for rid in recipients:
-                    if rid in existing: continue
+                    if rid in existing:
+                        continue
                     u = s.get(User, rid)
-                    if u is None: continue
-                    s.add(AbsensiReportRecipient(id_absensi=rec.id_absensi, id_user=rid, recipient_nama_snapshot=u.nama_pengguna, recipient_role_snapshot=_map_to_atasan_role(u), status=ReportStatus.terkirim))
+                    if u is None:
+                        continue
+                    s.add(
+                        AbsensiReportRecipient(
+                            id_absensi=rec.id_absensi,
+                            id_user=rid,
+                            recipient_nama_snapshot=u.nama_pengguna,
+                            recipient_role_snapshot=_map_to_atasan_role(u),
+                            status=ReportStatus.terkirim,
+                        )
+                    )
                     added_rcp += 1
 
             s.commit()
@@ -443,10 +509,11 @@ def absensi_status():
 
     with get_session() as s:
         today = today_local_date()
-        rec = s.query(Absensi).filter(
-            Absensi.id_user == user_id,
-            Absensi.tanggal == today
-        ).one_or_none()
+        rec = (
+            s.query(Absensi)
+            .filter(Absensi.id_user == user_id, Absensi.tanggal == today)
+            .one_or_none()
+        )
 
         if rec is None:
             return ok(mode="checkin", today=str(today), jam_masuk=None, jam_pulang=None, linked_agenda_ids=[])
@@ -470,14 +537,15 @@ def absensi_status():
             linked_agenda_ids=linked_ids,
         )
 
-# --- ENDPOINT BARU UNTUK FITUR ISTIRAHAT ---
+
+# --- FITUR ISTIRAHAT ---
 
 @absensi_bp.post("/istirahat/start")
 def start_istirahat():
     user_id = (request.form.get("user_id") or "").strip()
-    lat = request.form.get("start_istirahat_latitude", type=float)  
+    lat = request.form.get("start_istirahat_latitude", type=float)
     lng = request.form.get("start_istirahat_longitude", type=float)
-    
+
     if not user_id:
         return error("user_id wajib ada", 400)
     if lat is None or lng is None:
@@ -486,44 +554,51 @@ def start_istirahat():
     with get_session() as s:
         try:
             today = today_local_date()
-            absensi = s.query(Absensi).filter(
-                Absensi.id_user == user_id,
-                Absensi.tanggal == today
-            ).one_or_none()
+            absensi = (
+                s.query(Absensi)
+                .filter(Absensi.id_user == user_id, Absensi.tanggal == today)
+                .one_or_none()
+            )
 
             if absensi is None or absensi.jam_masuk is None:
                 return error("Anda harus check-in terlebih dahulu sebelum memulai istirahat", 400)
             if absensi.jam_pulang is not None:
                 return error("Tidak dapat memulai istirahat setelah check-out", 400)
 
-            existing_break = s.query(Istirahat).filter(
-                Istirahat.id_absensi == absensi.id_absensi,
-                Istirahat.end_istirahat.is_(None)
-            ).first()
+            existing_break = (
+                s.query(Istirahat)
+                .filter(Istirahat.id_absensi == absensi.id_absensi, Istirahat.end_istirahat.is_(None))
+                .first()
+            )
             if existing_break:
                 return error("Anda sudah dalam sesi istirahat", 409)
 
             now_local_dt = now_local()
             now_dt = now_local_dt.replace(tzinfo=None)
 
-            jadwal_kerja = s.query(ShiftKerja).join(PolaKerja).filter(
-                ShiftKerja.id_user == user_id,
-                ShiftKerja.tanggal_mulai <= today,
-                ShiftKerja.tanggal_selesai >= today
-            ).first()
+            jadwal_kerja = (
+                s.query(ShiftKerja)
+                .join(PolaKerja)
+                .filter(
+                    ShiftKerja.id_user == user_id,
+                    ShiftKerja.tanggal_mulai <= today,
+                    ShiftKerja.tanggal_selesai >= today,
+                )
+                .first()
+            )
 
             if jadwal_kerja and jadwal_kerja.polaKerja:
                 pola = jadwal_kerja.polaKerja
                 if pola.jam_istirahat_mulai and pola.jam_istirahat_selesai:
-                    
-                    # --- PERBAIKAN DI SINI ---
-                    # Langsung ambil komponen waktu (.time()) karena data di DB sudah dalam waktu lokal
                     jam_mulai_seharusnya = pola.jam_istirahat_mulai.time()
                     jam_selesai_seharusnya = pola.jam_istirahat_selesai.time()
                     jam_sekarang = now_local_dt.time()
-                    
+
                     if not (jam_mulai_seharusnya <= jam_sekarang <= jam_selesai_seharusnya):
-                        return error(f"Waktu istirahat hanya diizinkan antara {jam_mulai_seharusnya.strftime('%H:%M')} dan {jam_selesai_seharusnya.strftime('%H:%M')}", 403)
+                        return error(
+                            f"Waktu istirahat hanya diizinkan antara {jam_mulai_seharusnya.strftime('%H:%M')} dan {jam_selesai_seharusnya.strftime('%H:%M')}",
+                            403,
+                        )
 
             new_break = Istirahat(
                 id_user=user_id,
@@ -531,7 +606,7 @@ def start_istirahat():
                 tanggal_istirahat=today,
                 start_istirahat=now_dt,
                 start_istirahat_latitude=lat,
-                start_istirahat_longitude=lng
+                start_istirahat_longitude=lng,
             )
             s.add(new_break)
             s.commit()
@@ -540,12 +615,13 @@ def start_istirahat():
             return ok(
                 message="Sesi istirahat dimulai",
                 id_istirahat=new_break.id_istirahat,
-                start_istirahat=new_break.start_istirahat.isoformat()
+                start_istirahat=new_break.start_istirahat.isoformat(),
             )
 
         except Exception as e:
             s.rollback()
             return error(f"Terjadi kesalahan: {str(e)}", 500)
+
 
 @absensi_bp.post("/istirahat/end")
 def end_istirahat():
@@ -557,22 +633,24 @@ def end_istirahat():
         return error("user_id wajib ada", 400)
     if lat is None or lng is None:
         return error("Koordinat latitude dan longitude wajib ada", 400)
-        
+
     with get_session() as s:
         try:
             today = today_local_date()
-            absensi = s.query(Absensi).filter(
-                Absensi.id_user == user_id,
-                Absensi.tanggal == today
-            ).one_or_none()
+            absensi = (
+                s.query(Absensi)
+                .filter(Absensi.id_user == user_id, Absensi.tanggal == today)
+                .one_or_none()
+            )
 
             if absensi is None:
                 return error("Absensi hari ini tidak ditemukan", 404)
 
-            current_break = s.query(Istirahat).filter(
-                Istirahat.id_absensi == absensi.id_absensi,
-                Istirahat.end_istirahat.is_(None)
-            ).one_or_none()
+            current_break = (
+                s.query(Istirahat)
+                .filter(Istirahat.id_absensi == absensi.id_absensi, Istirahat.end_istirahat.is_(None))
+                .one_or_none()
+            )
 
             if current_break is None:
                 return error("Tidak ada sesi istirahat yang sedang berjalan", 404)
@@ -581,13 +659,13 @@ def end_istirahat():
             current_break.end_istirahat = now_dt
             current_break.end_istirahat_latitude = lat
             current_break.end_istirahat_longitude = lng
-            
+
             s.commit()
 
             return ok(
                 message="Sesi istirahat selesai",
                 id_istirahat=current_break.id_istirahat,
-                end_istirahat=now_dt.isoformat()
+                end_istirahat=now_dt.isoformat(),
             )
 
         except Exception as e:
@@ -595,7 +673,6 @@ def end_istirahat():
             return error(f"Terjadi kesalahan: {str(e)}", 500)
 
 
-# --- PERUBAHAN UTAMA DI SINI ---
 @absensi_bp.get("/istirahat/status")
 def istirahat_status():
     user_id = (request.args.get("user_id") or "").strip()
@@ -604,8 +681,7 @@ def istirahat_status():
 
     with get_session() as s:
         today = today_local_date()
-        
-        # Helper untuk serialisasi objek Istirahat ke dictionary
+
         def serialize_istirahat(b: Istirahat):
             data = {
                 "id_istirahat": b.id_istirahat,
@@ -625,11 +701,13 @@ def istirahat_status():
                 data["duration_seconds"] = int((b.end_istirahat - b.start_istirahat).total_seconds())
             return data
 
-        # Ambil SEMUA sesi istirahat untuk pengguna pada hari ini
-        all_breaks_today = s.query(Istirahat).join(Absensi).filter(
-            Absensi.id_user == user_id,
-            Istirahat.tanggal_istirahat == today
-        ).order_by(Istirahat.start_istirahat.asc()).all()
+        all_breaks_today = (
+            s.query(Istirahat)
+            .join(Absensi)
+            .filter(Absensi.id_user == user_id, Istirahat.tanggal_istirahat == today)
+            .order_by(Istirahat.start_istirahat.asc())
+            .all()
+        )
 
         active_break = None
         history = []
@@ -643,7 +721,6 @@ def istirahat_status():
             else:
                 total_duration += serialized["duration_seconds"]
 
-        # Tentukan status utama
         status = "active" if active_break else "inactive"
 
         return ok(
