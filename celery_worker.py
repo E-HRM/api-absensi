@@ -1,27 +1,32 @@
-# flask_api_face/celery_worker.py
+# celery_worker.py
+import os
+from celery import Celery
 
-from celery.signals import worker_process_init
+def make_celery() -> Celery:
+    broker = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+    backend = os.getenv("CELERY_RESULT_BACKEND", broker)
+    timezone = os.getenv("TIMEZONE", "Asia/Makassar")
 
-from app import create_app
-from app.extensions import celery, init_face_engine, init_supabase, init_firebase, FlaskContextTask
+    app = Celery(
+        "face_rec_bg",
+        broker=broker,
+        backend=backend,
+        include=["app.tasks.absensi_tasks"],  # pastikan modul task terdaftar
+    )
+    app.conf.update(
+        task_track_started=True,
+        timezone=timezone,
+        enable_utc=False,
+        task_serializer="json",
+        accept_content=["json"],
+        result_serializer="json",
+        task_acks_late=True,           # aman bila worker crash
+        worker_prefetch_multiplier=1,  # hindari penumpukan job di 1 worker
+    )
+    return app
 
-# Buat instance Flask untuk memberi context kepada task
-flask_app = create_app()
+# Celery instance yg dipakai oleh `celery -A celery_worker:app worker`
+app = make_celery()
 
-# Pastikan Task base tahu Flask app yang benar (hindari bentrok dengan Celery app)
-FlaskContextTask.flask_app = flask_app  # <- kunci agar tidak pakai Celery app
-
-@worker_process_init.connect
-def _init_each_process(**kwargs):
-    """
-    Dipanggil SETIAP proses worker Celery dibuat (termasuk pool workers).
-    """
-    with flask_app.app_context():
-        print("Menginisialisasi dependency di proses worker...")
-        init_supabase(flask_app)
-        init_firebase(flask_app)
-        init_face_engine(flask_app)
-        print("Selesai inisialisasi dependency di proses worker.")
-
-# Ekspos 'app' agar 'celery -A celery_worker:app worker ...' bisa menemukan Celery instance
-app = celery
+if __name__ == "__main__":
+    app.start()

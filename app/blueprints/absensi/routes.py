@@ -29,6 +29,12 @@ from ...db.models import (
     Istirahat,
 )
 
+# >>> Tambahan: import Celery tasks untuk proses background
+from ...tasks.absensi_tasks import (
+    process_checkin_task,
+    process_checkout_task,
+)
+
 absensi_bp = Blueprint("absensi", __name__)
 
 # ---------- helpers ----------
@@ -173,6 +179,10 @@ def _agendas_payload_for_absensi(session, absensi_id: str, id_only: bool = False
 
 @absensi_bp.post("/checkin")
 def checkin():
+    """
+    Refactor: verifikasi cepat + enqueue Celery task, balas 202.
+    Client dapat mem-poll /api/absensi/status untuk progres hasil.
+    """
     user_id = (request.form.get("user_id") or "").strip()
     loc_id = (request.form.get("location_id") or "").strip()
     lat = request.form.get("lat", type=float)
@@ -193,162 +203,72 @@ def checkin():
         return error("field 'image' wajib ada", 400)
 
     with get_session() as s:
+        # Validasi lokasi & geofence (ringan)
+        loc = s.get(Location, loc_id) if loc_id else None
+        if loc_id and loc is None:
+            return error("Lokasi tidak ditemukan", 404)
+
+        dist = None
+        if loc:
+            dist = haversine_m(lng, lat, float(loc.longitude), float(loc.latitude))
+            radius = _get_radius(loc)
+            if dist > radius:
+                return error(f"Di luar geofence (jarak {int(dist)} m > radius {int(radius)} m)", 400)
+
+        # Verifikasi wajah (ringan)
         try:
-            loc = s.get(Location, loc_id) if loc_id else None
-            if loc_id and loc is None:
-                return error("Lokasi tidak ditemukan", 404)
-
-            dist = None
-            if loc:
-                dist = haversine_m(lng, lat, float(loc.longitude), float(loc.latitude))
-                radius = _get_radius(loc)
-                if dist > radius:
-                    return error(f"Di luar geofence (jarak {int(dist)} m > radius {int(radius)} m)", 400)
-
-            try:
-                v = verify_user(user_id, f, metric=metric, threshold=threshold)
-                if not v.get("match", False):
-                    return error("Verifikasi wajah gagal. Tidak dapat check-in.", 400)
-            except Exception as e:
-                return error(f"Gagal melakukan verifikasi wajah: {str(e)}", 500)
-
-            today = today_local_date()
-            now_dt = now_local().replace(tzinfo=None, microsecond=0)
-
-            status_kehadiran = AbsensiStatus.tepat
-            HARI_MAP = {0: "SENIN", 1: "SELASA", 2: "RABU", 3: "KAMIS", 4: "JUMAT", 5: "SABTU", 6: "MINGGU"}
-            nama_hari_ini = HARI_MAP.get(today.weekday())
-
-            # Siapkan variabel jadwal_kerja dan jam_masuk_seharusnya untuk digunakan di bawah.
-            jadwal_kerja = None
-            jam_masuk_seharusnya = None  # simpan jam masuk dari pola kerja jika ada
-
-            if nama_hari_ini:
-                # gunakan joinedload agar akses polaKerja tidak n+1
-                jadwal_kerja = (
-                    s.query(ShiftKerja)
-                    .options(joinedload(ShiftKerja.polaKerja))
-                    .filter(
-                        ShiftKerja.id_user == user_id,
-                        ShiftKerja.tanggal_mulai <= today,
-                        ShiftKerja.tanggal_selesai >= today,
-                        ShiftKerja.hari_kerja.contains(nama_hari_ini),
-                    )
-                    .first()
-                )
-
-            if jadwal_kerja and jadwal_kerja.polaKerja and jadwal_kerja.polaKerja.jam_mulai:
-                # Ambil jam masuk seharusnya (waktu lokal) untuk kebutuhan notifikasi
-                jam_masuk_seharusnya = jadwal_kerja.polaKerja.jam_mulai.time()
-                jam_checkin_aktual = now_dt.time()
-                if jam_checkin_aktual > jam_masuk_seharusnya:
-                    status_kehadiran = AbsensiStatus.terlambat
-
-            rec = Absensi(
-                id_user=user_id,
-                face_verified_masuk=True,
-                face_verified_pulang=False,
-                tanggal=today,
-                id_lokasi_datang=loc.id_location if loc else None,
-                jam_masuk=now_dt,
-                status_masuk=status_kehadiran,
-                in_latitude=lat,
-                in_longitude=lng,
-            )
-            s.add(rec)
-
-            s.flush()
-
-            catatan_payload: list[dict[str, str | None]] = []
-            if catatan_entries:
-                catatan_rows: list[Catatan] = []
-                for entry in catatan_entries:
-                    row = Catatan(
-                        id_absensi=rec.id_absensi,
-                        deskripsi_catatan=entry["deskripsi_catatan"],
-                        lampiran_url=entry["lampiran_url"],
-                    )
-                    s.add(row)
-                    catatan_rows.append(row)
-                s.flush()
-                catatan_payload = [
-                    {
-                        "id_catatan": row.id_catatan,
-                        "deskripsi_catatan": row.deskripsi_catatan,
-                        "lampiran_url": row.lampiran_url,
-                    }
-                    for row in catatan_rows
-                ]
-
-            linked_count, skipped_count = _link_agendas_to_absensi(s, user_id, rec.id_absensi, agenda_ids)
-
-            added_rcp = 0
-            if recipients:
-                existing = {
-                    r[0]
-                    for r in s.query(AbsensiReportRecipient.id_user)
-                    .filter(AbsensiReportRecipient.id_absensi == rec.id_absensi)
-                    .all()
-                }
-                for rid in recipients:
-                    if rid in existing:
-                        continue
-                    u = s.get(User, rid)
-                    if u is None:
-                        continue
-                    s.add(
-                        AbsensiReportRecipient(
-                            id_absensi=rec.id_absensi,
-                            id_user=rid,
-                            recipient_nama_snapshot=u.nama_pengguna,
-                            recipient_role_snapshot=_map_to_atasan_role(u),
-                            status=ReportStatus.terkirim,
-                        )
-                    )
-                    added_rcp += 1
-
-            s.commit()
-
-            # Setelah data tersimpan, kirim notifikasi ke user
-            try:
-                user = s.get(User, user_id)
-                if user:
-                    if status_kehadiran == AbsensiStatus.terlambat:
-                        dyn = {
-                            "nama_karyawan": user.nama_pengguna,
-                            "waktu_checkin": now_dt.strftime("%H:%M"),
-                            "jam_masuk": jam_masuk_seharusnya.strftime("%H:%M") if jam_masuk_seharusnya else "",
-                        }
-                        send_notification("LATE_CHECK_IN", user_id, dyn, s)
-                    else:
-                        dyn = {
-                            "nama_karyawan": user.nama_pengguna,
-                            "waktu_checkin": now_dt.strftime("%H:%M"),
-                        }
-                        send_notification("SUCCESS_CHECK_IN", user_id, dyn, s)
-            except Exception:
-                # Jangan gagalkan proses jika notifikasi gagal
-                pass
-
-            return ok(
-                mode="checkin",
-                distanceMeters=dist,
-                agendasLinked=linked_count,
-                agendasSkipped=skipped_count,
-                recipientsAdded=added_rcp,
-                catatan=catatan_payload,
-                **v,
-            )
-        except IntegrityError:
-            s.rollback()
-            return error("Check-in duplikat untuk tanggal ini (sudah check-in).", 409)
+            v = verify_user(user_id, f, metric=metric, threshold=threshold)
+            if not v.get("match", False):
+                return error("Verifikasi wajah gagal. Tidak dapat check-in.", 400)
         except Exception as e:
-            s.rollback()
-            return error(f"Terjadi kesalahan internal: {str(e)}", 500)
+            return error(f"Gagal melakukan verifikasi wajah: {str(e)}", 500)
+
+        # Precheck duplikat agar balasan cepat bila sudah check-in
+        today = today_local_date()
+        already = (
+            s.query(Absensi)
+            .filter(Absensi.id_user == user_id, Absensi.tanggal == today)
+            .one_or_none()
+        )
+        if already:
+            return error("Check-in duplikat untuk tanggal ini (sudah check-in).", 409)
+
+    # Susun payload untuk background task (operasi I/O berat dilakukan di worker)
+    payload = {
+        "user_id": user_id,
+        "today_local": today.isoformat(),
+        "now_local_iso": now_local().replace(microsecond=0).isoformat(),
+        "location": {
+            "id": loc_id or None,
+            "lat": lat,
+            "lng": lng,
+            "distance_m": int(dist) if dist is not None else None,
+        },
+        "agenda_ids": agenda_ids,          # untuk ditautkan di worker
+        "recipients": recipients,          # untuk AbsensiReportRecipient di worker
+        "catatan_entries": catatan_entries # untuk Catatan di worker
+    }
+
+    # Enqueue Celery task dan balas cepat
+    async_res = process_checkin_task.delay(payload)
+    return (
+        ok(
+            accepted=True,
+            task_id=async_res.id,
+            message="Check-in diterima, diproses di background",
+            distanceMeters=(int(dist) if dist is not None else None),
+            **v,  # propagasi info verifikasi wajah (mis. score/distance)
+        ),
+        202,
+    )
 
 
 @absensi_bp.post("/checkout")
 def checkout():
+    """
+    Refactor: verifikasi cepat + enqueue Celery task, balas 202.
+    Worker akan mengisi jam_pulang, memperbarui catatan/agendas/recipients, dan kirim notifikasi.
+    """
     user_id = (request.form.get("user_id") or "").strip()
     loc_id = (request.form.get("location_id") or "").strip()
     lat = request.form.get("lat", type=float)
@@ -369,136 +289,64 @@ def checkout():
         return error("field 'image' wajib ada", 400)
 
     with get_session() as s:
+        today = today_local_date()
+        rec = (
+            s.query(Absensi)
+            .filter(Absensi.id_user == user_id, Absensi.tanggal == today)
+            .one_or_none()
+        )
+
+        if rec is None:
+            return error("Belum ada check-in untuk hari ini.", 404)
+
+        loc = s.get(Location, loc_id) if loc_id else None
+        if loc_id and loc is None:
+            return error("Lokasi tidak ditemukan", 404)
+
+        dist = None
+        if loc:
+            dist = haversine_m(lng, lat, float(loc.longitude), float(loc.latitude))
+            radius = _get_radius(loc)
+            if dist > radius:
+                return error(f"Di luar geofence (jarak {int(dist)} m > radius {int(radius)} m)", 400)
+
         try:
-            today = today_local_date()
-            rec = (
-                s.query(Absensi)
-                .filter(Absensi.id_user == user_id, Absensi.tanggal == today)
-                .one_or_none()
-            )
-
-            if rec is None:
-                return error("Belum ada check-in untuk hari ini.", 404)
-
-            loc = s.get(Location, loc_id) if loc_id else None
-            if loc_id and loc is None:
-                return error("Lokasi tidak ditemukan", 404)
-
-            dist = None
-            if loc:
-                dist = haversine_m(lng, lat, float(loc.longitude), float(loc.latitude))
-                radius = _get_radius(loc)
-                if dist > radius:
-                    return error(f"Di luar geofence (jarak {int(dist)} m > radius {int(radius)} m)", 400)
-
-            try:
-                v = verify_user(user_id, f, metric=metric, threshold=threshold)
-                if not v.get("match", False):
-                    return error("Verifikasi wajah gagal. Tidak dapat check-out.", 400)
-            except Exception as e:
-                return error(f"Gagal melakukan verifikasi wajah: {str(e)}", 500)
-
-            now_dt = now_local().replace(tzinfo=None, microsecond=0)
-            rec.jam_pulang = now_dt
-            rec.id_lokasi_pulang = loc.id_location if loc else None
-            rec.out_latitude = lat
-            rec.out_longitude = lng
-            rec.face_verified_pulang = True
-
-            existing_catatan = (
-                s.query(Catatan)
-                .filter(Catatan.id_absensi == rec.id_absensi)
-                .order_by(Catatan.id_catatan.asc())
-                .all()
-            )
-            kept_rows: list[Catatan] = []
-
-            if catatan_entries:
-                for idx, entry in enumerate(catatan_entries):
-                    if idx < len(existing_catatan):
-                        row = existing_catatan[idx]
-                        row.deskripsi_catatan = entry["deskripsi_catatan"]
-                        row.lampiran_url = entry["lampiran_url"]
-                    else:
-                        row = Catatan(
-                            id_absensi=rec.id_absensi,
-                            deskripsi_catatan=entry["deskripsi_catatan"],
-                            lampiran_url=entry["lampiran_url"],
-                        )
-                        s.add(row)
-                    kept_rows.append(row)
-                for row in existing_catatan[len(catatan_entries) :]:
-                    s.delete(row)
-            else:
-                kept_rows = list(existing_catatan)
-
-            s.flush()
-
-            catatan_payload = [
-                {
-                    "id_catatan": row.id_catatan,
-                    "deskripsi_catatan": row.deskripsi_catatan,
-                    "lampiran_url": row.lampiran_url,
-                }
-                for row in kept_rows
-            ]
-
-            linked_count, skipped_count = _link_agendas_to_absensi(s, user_id, rec.id_absensi, agenda_ids)
-            agendas_payload = _agendas_payload_for_absensi(s, rec.id_absensi)
-
-            added_rcp = 0
-            if recipients:
-                existing = {
-                    r[0]
-                    for r in s.query(AbsensiReportRecipient.id_user)
-                    .filter(AbsensiReportRecipient.id_absensi == rec.id_absensi)
-                    .all()
-                }
-                for rid in recipients:
-                    if rid in existing:
-                        continue
-                    u = s.get(User, rid)
-                    if u is None:
-                        continue
-                    s.add(
-                        AbsensiReportRecipient(
-                            id_absensi=rec.id_absensi,
-                            id_user=rid,
-                            recipient_nama_snapshot=u.nama_pengguna,
-                            recipient_role_snapshot=_map_to_atasan_role(u),
-                            status=ReportStatus.terkirim,
-                        )
-                    )
-                    added_rcp += 1
-
-            s.commit()
-
-            # Kirim notifikasi sukses check-out
-            try:
-                user = s.get(User, user_id)
-                if user:
-                    dyn = {
-                        "nama_karyawan": user.nama_pengguna,
-                        "waktu_checkout": now_dt.strftime("%H:%M"),
-                    }
-                    send_notification("SUCCESS_CHECK_OUT", user_id, dyn, s)
-            except Exception:
-                pass
-
-            return ok(
-                mode="checkout",
-                distanceMeters=dist,
-                jam_pulang=rec.jam_pulang.isoformat() if rec.jam_pulang else None,
-                agendasLinked=linked_count,
-                agendasSkipped=skipped_count,
-                recipientsAdded=added_rcp,
-                catatan=catatan_payload,
-                agendas=agendas_payload,
-                **v,
-            )
+            v = verify_user(user_id, f, metric=metric, threshold=threshold)
+            if not v.get("match", False):
+                return error("Verifikasi wajah gagal. Tidak dapat check-out.", 400)
         except Exception as e:
-            s.rollback()
-            return error(f"Terjadi kesalahan internal saat checkout: {str(e)}", 500)
+            return error(f"Gagal melakukan verifikasi wajah: {str(e)}", 500)
+
+        absensi_id = rec.id_absensi  # diperlukan worker untuk update baris yang sama
+
+    # Payload checkout untuk worker
+    payload = {
+        "user_id": user_id,
+        "absensi_id": absensi_id,
+        "today_local": today.isoformat(),
+        "now_local_iso": now_local().replace(microsecond=0).isoformat(),
+        "location": {
+            "id": loc_id or None,
+            "lat": lat,
+            "lng": lng,
+            "distance_m": int(dist) if dist is not None else None,
+        },
+        "agenda_ids": agenda_ids,           # worker akan menautkan jika ada yg belum
+        "recipients": recipients,           # worker akan tambah penerima laporan
+        "catatan_entries": catatan_entries  # worker akan upsert urutannya
+    }
+
+    async_res = process_checkout_task.delay(payload)
+    return (
+        ok(
+            accepted=True,
+            task_id=async_res.id,
+            message="Check-out diterima, diproses di background",
+            distanceMeters=(int(dist) if dist is not None else None),
+            **v,
+        ),
+        202,
+    )
 
 
 @absensi_bp.get("/status")
