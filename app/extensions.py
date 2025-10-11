@@ -147,42 +147,47 @@ def get_supabase() -> Optional[Client]:
 # Firebase Admin
 # -------------------------
 def init_firebase(app: Flask) -> None:
-    """Inisialisasi Firebase Admin dari path JSON atau env JSON."""
+    """Inisialisasi Firebase Admin dari variabel lingkungan."""
     global _firebase_app
-    if _firebase_app is not None:
+    if _firebase_app is not None or firebase_admin._apps:
         return
 
     cred = None
-    creds_path = app.config.get("FIREBASE_CREDENTIALS_PATH")
-    creds_json_str = app.config.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+    try:
+        # Prioritas 1: Menggunakan variabel lingkungan terpisah dari app.config
+        project_id = app.config.get('FIREBASE_PROJECT_ID')
+        client_email = app.config.get('FIREBASE_CLIENT_EMAIL')
+        private_key = app.config.get('FIREBASE_PRIVATE_KEY')
 
-    if creds_path and os.path.exists(creds_path):
-        try:
-            cred = credentials.Certificate(creds_path)
-            app.logger.info(f"Loading Firebase credentials from path: {creds_path}")
-        except Exception as e:
-            app.logger.warning(f"Failed to load Firebase credentials from path {creds_path}: {e}")
+        # === LOGGING UNTUK DEBUGGING ===
+        log.info(f"Firebase Init Check: project_id is {'present' if project_id else 'missing'}")
+        log.info(f"Firebase Init Check: client_email is {'present' if client_email else 'missing'}")
+        log.info(f"Firebase Init Check: private_key is {'present' if private_key else 'missing'}")
+        # ===============================
 
-    if cred is None and creds_json_str:
-        try:
-            if creds_json_str.strip().startswith("{"):
-                cred_dict = json.loads(creds_json_str)
-                cred = credentials.Certificate(cred_dict)
-                app.logger.info("Loading Firebase credentials from FIREBASE_SERVICE_ACCOUNT_JSON.")
-            else:
-                app.logger.warning("FIREBASE_SERVICE_ACCOUNT_JSON bukan JSON valid.")
-        except Exception as e:
-            app.logger.warning(f"Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+        if all([project_id, client_email, private_key]):
+            private_key_formatted = private_key.replace('\\n', '\n')
+            cred_dict = {
+                "type": "service_account",
+                "project_id": project_id,
+                "private_key": private_key_formatted,
+                "client_email": client_email,
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+            cred = credentials.Certificate(cred_dict)
+            app.logger.info("Memuat kredensial Firebase dari variabel lingkungan.")
+        else:
+            app.logger.warning("Satu atau lebih variabel lingkungan Firebase (PROJECT_ID, CLIENT_EMAIL, PRIVATE_KEY) tidak ditemukan di app.config.")
 
-    if cred:
-        try:
+        # Inisialisasi aplikasi jika kredensial berhasil didapatkan
+        if cred:
             _firebase_app = firebase_admin.initialize_app(cred)
             app.logger.info("Firebase Admin SDK initialized.")
-        except Exception as e:
-            _firebase_app = None
-            app.logger.error(f"Error initializing Firebase Admin SDK: {e}", exc_info=True)
-    else:
-        app.logger.warning("No valid Firebase credentials found; Firebase not initialized.")
+        else:
+            app.logger.warning("No valid Firebase credentials found; Firebase not initialized.")
+
+    except Exception as e:
+        app.logger.error(f"Error initializing Firebase Admin SDK: {e}", exc_info=True)
 
 
 # -------------------------
