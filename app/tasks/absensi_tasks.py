@@ -1,116 +1,100 @@
-# app/tasks/absensi_tasks.py
+# app/blueprints/absensi/tasks.py
+# Task Celery untuk fitur absensi.
+# Pastikan modul ini ter-import saat worker start (lihat catatan di bawah).
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional, Any, Dict
+from typing import Any, Dict, Optional
 
 from app.extensions import celery
 
-# Optional-import: kalau DB/model belum siap, task tetap jalan (no-op) dan tidak bikin worker mati.
-try:
-    from app.db import get_session
-    from app.db.models import Absensi  # sesuaikan dengan model di proyekmu
-except Exception:
-    get_session = None   # type: ignore
-    Absensi = None       # type: ignore
-
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
-def _safe_iso_to_date(value: Optional[str]):
-    """Konversi ISO string -> date; fallback ke hari ini (UTC) jika gagal/None."""
-    try:
-        if not value:
-            return datetime.now(timezone.utc).date()
-        # Terima 'YYYY-MM-DD' atau full ISO 'YYYY-MM-DDTHH:MM:SS+ZZ'
-        dt = datetime.fromisoformat(value)
-        return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).date()
-    except Exception:
-        return datetime.now(timezone.utc).date()
+@celery.task(name="absensi.healthcheck", bind=True)
+def healthcheck(self) -> Dict[str, Any]:
+    """
+    Task sederhana untuk cek hidup-mati worker.
+    """
+    host = getattr(getattr(self, "request", None), "hostname", "unknown")
+    logger.info("[absensi.healthcheck] OK from %s", host)
+    return {"status": "ok", "host": host}
 
 
 @celery.task(name="absensi.process_checkin_task", bind=True)
-def process_checkin_task(self, **payload: Any) -> Dict[str, Any]:
+def process_checkin_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Proses check-in (versi defensif).
-    Menerima payload bebas via kwargs, contoh tipikal:
-      user_id, location_id, lat, lon, waktu|timestamp|waktu_checkin, face_score, dll.
-    Saat skema DB sudah fix, kita bisa tulis upsert Absensi yang sebenarnya.
+    Proses check-in secara asynchronous.
+    NOTE:
+      - Karena bind=True, argumen pertama WAJIB 'self'.
+      - 'payload' harus JSON-serializable (dict of str/number/bool/list/dict).
     """
-    data = dict(payload or {})
-    user_id = data.get("user_id")
-    when_iso = data.get("waktu") or data.get("timestamp") or data.get("waktu_checkin")
-    tanggal = _safe_iso_to_date(when_iso)
-
     try:
-        # Sentuh DB sekadar memastikan konektivitas (tanpa asumsi kolom)
-        if get_session and Absensi:
-            with get_session() as s:
-                _ = s.query(Absensi).limit(1).all()
+        logger.info("[process_checkin_task] start payload=%s", payload)
 
-        log.info("[CHECKIN] user=%s tanggal=%s payload_keys=%s", user_id, tanggal, list(data.keys()))
-        return {"ok": True, "event": "checkin", "user_id": user_id, "tanggal": str(tanggal)}
+        # TODO: Panggil service/logic milikmu di sini.
+        # Misal:
+        #   from app.services.absensi_service import handle_checkin
+        #   result = handle_checkin(payload)
+        # Untuk sementara, kita kembalikan ack minimal:
+        result = {
+            "status": "ok",
+            "message": "check-in diproses di background",
+            "received_keys": list(payload.keys()),
+        }
+
+        logger.info("[process_checkin_task] done user_id=%s", payload.get("user_id"))
+        return result
+
     except Exception as e:
-        log.exception("process_checkin_task gagal: user_id=%s", user_id)
-        return {"ok": False, "event": "checkin", "error": str(e)}
+        logger.exception("[process_checkin_task] error: %s", e)
+        return {"status": "error", "message": str(e)}
 
 
 @celery.task(name="absensi.process_checkout_task", bind=True)
-def process_checkout_task(self, **payload: Any) -> Dict[str, Any]:
+def process_checkout_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Proses check-out (versi defensif).
-    Menerima payload bebas via kwargs: user_id, waktu|timestamp|waktu_checkout, dst.
-    """
-    data = dict(payload or {})
-    user_id = data.get("user_id")
-    when_iso = data.get("waktu") or data.get("timestamp") or data.get("waktu_checkout")
-    tanggal = _safe_iso_to_date(when_iso)
-
-    try:
-        if get_session and Absensi:
-            with get_session() as s:
-                _ = s.query(Absensi).limit(1).all()
-
-        log.info("[CHECKOUT] user=%s tanggal=%s payload_keys=%s", user_id, tanggal, list(data.keys()))
-        return {"ok": True, "event": "checkout", "user_id": user_id, "tanggal": str(tanggal)}
-    except Exception as e:
-        log.exception("process_checkout_task gagal: user_id=%s", user_id)
-        return {"ok": False, "event": "checkout", "error": str(e)}
-
-
-@celery.task(name="absensi.recalculate_user_day")
-def recalculate_user_day(user_id: str, tanggal_iso: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Rehitung status absensi 1 user pada 1 tanggal.
-    Saat model sudah pasti, ganti query count() ini dengan logika bisnis yang valid.
+    Proses checkout secara asynchronous.
     """
     try:
-        tanggal = _safe_iso_to_date(tanggal_iso)
-        if get_session and Absensi:
-            with get_session() as s:
-                # Tidak mengasumsikan ada kolom 'tanggal' — kalau ada, bagus; kalau tidak, ini tetap aman.
-                q = s.query(Absensi).filter(Absensi.user_id == user_id)
-                # Kalau model punya kolom 'tanggal', filter-kan. Kalau tidak, biarkan saja (count semua milik user).
-                if hasattr(Absensi, "tanggal"):
-                    q = q.filter(getattr(Absensi, "tanggal") == tanggal)  # type: ignore
-                count = q.count()
-        else:
-            count = 0
-        return {"ok": True, "user_id": user_id, "tanggal": str(tanggal), "rows": count}
+        logger.info("[process_checkout_task] start payload=%s", payload)
+
+        # TODO: panggil service checkout milikmu
+        result = {
+            "status": "ok",
+            "message": "checkout diproses di background",
+            "received_keys": list(payload.keys()),
+        }
+
+        logger.info("[process_checkout_task] done user_id=%s", payload.get("user_id"))
+        return result
+
     except Exception as e:
-        log.exception("recalculate_user_day gagal user_id=%s tanggal=%s", user_id, tanggal_iso)
-        return {"ok": False, "error": str(e)}
+        logger.exception("[process_checkout_task] error: %s", e)
+        return {"status": "error", "message": str(e)}
 
 
-@celery.task(name="absensi.healthcheck")
-def absensi_healthcheck() -> Dict[str, Any]:
-    """Task sederhana untuk memastikan worker + DB bisa diakses."""
+@celery.task(name="absensi.recalculate_user_day", bind=True)
+def recalculate_user_day(self, user_id: str, tanggal: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Recalculate rekap harian user (misal setelah koreksi manual).
+    'tanggal' opsional (format 'YYYY-MM-DD'); bila None, gunakan hari ini (di service).
+    """
     try:
-        if get_session and Absensi:
-            with get_session() as s:
-                _ = s.query(Absensi).limit(1).all()
-        return {"ok": True, "msg": "worker hidup & DB terbaca"}
+        logger.info("[recalculate_user_day] start user_id=%s tanggal=%s", user_id, tanggal)
+
+        # TODO: panggil service kalkulasi milikmu
+        result = {
+            "status": "ok",
+            "message": "recalculate diproses di background",
+            "user_id": user_id,
+            "tanggal": tanggal,
+        }
+
+        logger.info("[recalculate_user_day] done user_id=%s tanggal=%s", user_id, tanggal)
+        return result
+
     except Exception as e:
-        log.exception("Healthcheck gagal")
-        return {"ok": False, "error": str(e)}
+        logger.exception("[recalculate_user_day] error: %s", e)
+        return {"status": "error", "message": str(e)}
