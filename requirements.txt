@@ -12,3 +12,4 @@ firebase-admin
 cryptography>=42,<45
 celery
 redis
+gunicorn
