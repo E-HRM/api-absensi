@@ -57,7 +57,6 @@ def process_checkin_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     
     with get_session() as s:
         try:
-            # 1. Tentukan status kehadiran (tepat waktu / terlambat)
             jadwal_kerja = s.query(ShiftKerja).join(PolaKerja).filter(
                 ShiftKerja.id_user == user_id,
                 ShiftKerja.tanggal_mulai <= today,
@@ -71,7 +70,6 @@ def process_checkin_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                 if jam_checkin_aktual > jam_masuk_seharusnya:
                     status_kehadiran = AbsensiStatus.terlambat
 
-            # 2. Buat record absensi baru
             rec = Absensi(
                 id_user=user_id,
                 tanggal=today,
@@ -81,15 +79,14 @@ def process_checkin_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                 in_latitude=location.get("lat"),
                 in_longitude=location.get("lng"),
                 face_verified_masuk=True,
-                face_verified_pulang=False, # Default
+                face_verified_pulang=False,
             )
             s.add(rec)
-            s.flush() # flush() untuk mendapatkan id_absensi sebelum commit
+            s.flush()
             
             absensi_id = rec.id_absensi
             logger.info(f"Absensi record created with id: {absensi_id}")
 
-            # 3. Tautkan Agenda Kerja
             agenda_ids = payload.get("agenda_ids", [])
             if agenda_ids:
                 s.query(AgendaKerja).filter(
@@ -98,11 +95,9 @@ def process_checkin_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                     AgendaKerja.id_absensi.is_(None)
                 ).update({"id_absensi": absensi_id}, synchronize_session=False)
 
-            # 4. Tambahkan Catatan
             for entry in payload.get("catatan_entries", []):
                 s.add(Catatan(id_absensi=absensi_id, **entry))
 
-            # 5. Tambahkan Penerima Laporan (Recipients)
             recipient_ids = payload.get("recipients", [])
             if recipient_ids:
                 recipients = s.query(User).filter(User.id_user.in_(recipient_ids)).all()
@@ -125,13 +120,76 @@ def process_checkin_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             logger.exception("[process_checkin_task_v2] error: %s", e)
             return {"status": "error", "message": str(e)}
 
-
 @celery.task(name="absensi.process_checkout_task_v2", bind=True)
 def process_checkout_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-    # (Pastikan task checkout Anda juga memiliki logika yang benar)
+    """
+    Proses check-out asynchronous.
+    """
     logger.info("[process_checkout_task_v2] start payload=%s", payload)
-    # ... Logika untuk checkout ...
-    return {"status": "ok", "message": "checkout diproses di background"}
+    user_id = payload.get("user_id")
+    absensi_id = payload.get("absensi_id")
+    now_dt = datetime.fromisoformat(payload["now_local_iso"]).replace(tzinfo=None)
+    location = payload.get("location", {})
+
+    with get_session() as s:
+        try:
+            # 1. Ambil record absensi yang sudah ada
+            rec = s.get(Absensi, absensi_id)
+            if not rec:
+                logger.error(f"Absensi record with id {absensi_id} not found for checkout.")
+                return {"status": "error", "message": f"Absensi record {absensi_id} not found."}
+
+            # 2. Update data checkout
+            rec.jam_pulang = now_dt
+            rec.id_lokasi_pulang = location.get("id")
+            rec.out_latitude = location.get("lat")
+            rec.out_longitude = location.get("lng")
+            rec.face_verified_pulang = True
+            
+            # (Tambahkan logika status pulang jika perlu, misal pulang cepat)
+            rec.status_pulang = AbsensiStatus.tepat
+
+            # 3. Tautkan Agenda Kerja (jika ada yang baru)
+            agenda_ids = payload.get("agenda_ids", [])
+            if agenda_ids:
+                s.query(AgendaKerja).filter(
+                    AgendaKerja.id_user == user_id,
+                    AgendaKerja.id_agenda_kerja.in_(agenda_ids),
+                    AgendaKerja.id_absensi.is_(None)
+                ).update({"id_absensi": absensi_id}, synchronize_session=False)
+
+            # 4. Tambahkan Catatan baru
+            for entry in payload.get("catatan_entries", []):
+                s.add(Catatan(id_absensi=absensi_id, **entry))
+
+            # 5. Tambahkan Penerima Laporan baru (jika ada)
+            recipient_ids = payload.get("recipients", [])
+            if recipient_ids:
+                # Hindari duplikasi
+                existing_recipients = s.query(AbsensiReportRecipient.id_user).filter_by(id_absensi=absensi_id).all()
+                existing_ids = {r[0] for r in existing_recipients}
+                new_ids = set(recipient_ids) - existing_ids
+                
+                if new_ids:
+                    recipients = s.query(User).filter(User.id_user.in_(new_ids)).all()
+                    for u in recipients:
+                        s.add(AbsensiReportRecipient(
+                            id_absensi=absensi_id,
+                            id_user=u.id_user,
+                            recipient_nama_snapshot=u.nama_pengguna,
+                            recipient_role_snapshot=_map_to_atasan_role(u.role),
+                            status=ReportStatus.terkirim,
+                        ))
+
+            s.commit()
+            logger.info(f"[process_checkout_task_v2] SUCCESS for user_id={user_id}")
+            
+            return {"status": "ok", "message": "Check-out berhasil disimpan", "absensi_id": absensi_id}
+
+        except Exception as e:
+            s.rollback()
+            logger.exception("[process_checkout_task_v2] error: %s", e)
+            return {"status": "error", "message": str(e)}
 
 # --- Alias kompatibilitas ---
 process_checkin_task = process_checkin_task_v2
