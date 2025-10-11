@@ -84,7 +84,7 @@ def init_face_engine(app=None):
 
     try:
         providers = ["CPUExecutionProvider"]
-        model_name = "buffalo_l"
+        model_name = "buffalo_s"
         det_size = (640, 640)
 
         engine = FaceAnalysis(name=model_name, providers=providers)
