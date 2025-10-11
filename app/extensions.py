@@ -13,7 +13,6 @@ from flask_cors import CORS
 from celery import Celery, Task
 
 from supabase import create_client, Client
-from insightface.app import FaceAnalysis
 import firebase_admin
 from firebase_admin import credentials
 
@@ -23,13 +22,10 @@ if os.name == "nt":
 
 # --- Globals ---
 celery: Celery = Celery(__name__)
-_face_engine: Optional[FaceAnalysis] = None
+_face_engine: Optional[FaceAnalysis] = None # <-- Kita hanya akan pakai variabel ini
 _supabase: Optional[Client] = None
 _firebase_app: Optional[firebase_admin.App] = None
-face_engine = None
 log = logging.getLogger(__name__)
-
-
 
 # -------------------------
 # Celery <-> Flask binding
@@ -39,22 +35,19 @@ class FlaskContextTask(Task):
     Memastikan setiap task berjalan di dalam Flask app_context.
     Gunakan atribut 'flask_app' agar tidak bentrok dengan Task.app (Celery app).
     """
-    flask_app: Optional[Flask] = None  # <-- penting: JANGAN pakai nama 'app' atau '_app'
+    flask_app: Optional[Flask] = None
 
     def __call__(self, *args, **kwargs):
         app_obj = getattr(self, "flask_app", None)
-
-        # Jika belum ada, coba ambil dari current_app bila tersedia
         if app_obj is None:
             try:
-                app_obj = current_app._get_current_object()  # type: ignore
+                app_obj = current_app._get_current_object()
             except Exception:
                 app_obj = None
 
         if app_obj is not None:
             with app_obj.app_context():
                 return self.run(*args, **kwargs)
-        # fallback terakhir tanpa context (seharusnya jarang terjadi)
         return self.run(*args, **kwargs)
 
 
@@ -73,9 +66,8 @@ def init_celery(app: Flask) -> None:
         enable_utc=False,
     )
 
-    # Pasang Task base & injeksikan Flask app dengan nama atribut yang tidak bentrok
-    celery.Task = FlaskContextTask  # type: ignore
-    FlaskContextTask.flask_app = app  # type: ignore
+    celery.Task = FlaskContextTask
+    FlaskContextTask.flask_app = app
 
 
 # -------------------------
@@ -86,12 +78,11 @@ def init_face_engine(app=None):
     Inisialisasi global face_engine sekali saja.
     Argumen 'app' opsional agar kompatibel dengan pemanggilan lama/baru.
     """
-    global face_engine
-    if face_engine is not None:
-        return face_engine
+    global _face_engine  # <-- DIUBAH: Menggunakan _face_engine
+    if _face_engine is not None:
+        return _face_engine
 
     try:
-        # Bisa tarik config dari current_app jika ada
         providers = ["CPUExecutionProvider"]
         model_name = "buffalo_l"
         det_size = (640, 640)
@@ -99,12 +90,11 @@ def init_face_engine(app=None):
         engine = FaceAnalysis(name=model_name, providers=providers)
         engine.prepare(ctx_id=0, det_size=det_size)
 
-        face_engine = engine
+        _face_engine = engine  # <-- DIUBAH: Menyimpan ke _face_engine
         log.info("InsightFace initialized: name=%s providers=%s", model_name, providers)
-        return face_engine
+        return _face_engine
     except Exception as e:
         log.warning("InsightFace init failed: %s", e)
-        # Biarkan None; modul lain harus handle kondisi engine tidak siap
         return None
 
 def get_face_engine() -> FaceAnalysis:
@@ -112,7 +102,7 @@ def get_face_engine() -> FaceAnalysis:
     global _face_engine
     if _face_engine is None:
         try:
-            app = current_app._get_current_object()  # type: ignore
+            app = current_app._get_current_object()
         except Exception:
             app = None
 
@@ -201,11 +191,7 @@ def init_firebase(app: Flask) -> None:
 def init_app(app: Flask) -> None:
     """Dipanggil dari create_app()."""
     CORS(app, resources={r"/api/*": {"origins": "*"}})
-
-    # Binding Celery ke Flask (dan Task base with app_context)
     init_celery(app)
-
-    # Komponen lain yang ringan
     init_supabase(app)
     try:
         init_firebase(app)
