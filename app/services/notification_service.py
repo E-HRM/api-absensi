@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Any, Dict
 
 from firebase_admin import messaging
-# Pastikan Firebase Admin SDK telah diinisialisasi sebelum mengirim notifikasi.
 from ..firebase import initialize_firebase
 from sqlalchemy.orm import Session
 
@@ -61,6 +60,7 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
     title = _format_message(template.title_template, dynamic_data)
     body = _format_message(template.body_template, dynamic_data)
 
+    # Simpan notifikasi ke database (ini tidak berubah)
     notif = Notification(
         id_user=user_id,
         title=title,
@@ -71,22 +71,26 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
     session.add(notif)
     session.commit()
 
-    # --- PERUBAHAN DI SINI ---
-    # Kita hanya akan mengirim payload 'notification' agar OS mobile
-    # bisa menampilkannya secara otomatis saat aplikasi di background.
+    # --- PERUBAHAN UTAMA DI SINI ---
+    # Kita membuat payload yang strukturnya sama persis dengan backend Next.js.
+    # Hanya ada 'notification', 'android', dan 'apns' di level atas.
     message = messaging.MulticastMessage(
         tokens=tokens,
-        notification=messaging.Notification(title=title, body=body),
+        notification=messaging.Notification(
+            title=title,
+            body=body,
+        ),
         android=messaging.AndroidConfig(
             notification=messaging.AndroidNotification(sound="default")
         ),
         apns=messaging.APNSConfig(
             payload=messaging.APNSPayload(
                 aps=messaging.Aps(sound="default")
-            ),
+            )
         ),
+        # Pastikan tidak ada payload 'data' di sini
     )
-    # -------------------------
+    # ---------------------------------
 
     try:
         responses = messaging.send_each_for_multicast(message)
