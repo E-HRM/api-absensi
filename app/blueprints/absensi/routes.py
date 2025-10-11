@@ -29,8 +29,8 @@ from ...db.models import (
     Istirahat,
 )
 
-# >>> Import Celery tasks (pakai v2 agar tidak bentrok definisi lama)
-from .tasks import (
+# >>> Import Celery tasks (ABSOLUTE import, stabil)
+from app.blueprints.absensi.tasks import (
     process_checkin_task_v2,
     process_checkout_task_v2,
 )
