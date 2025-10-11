@@ -1,6 +1,5 @@
 # app/blueprints/absensi/tasks.py
-# Task Celery untuk fitur absensi.
-# Pastikan modul ini ter-import saat worker start (lihat catatan di bawah).
+# Task Celery untuk fitur absensi (v2 untuk menghindari bentrok signature lama)
 
 from __future__ import annotations
 
@@ -10,55 +9,48 @@ from typing import Any, Dict, Optional
 from app.extensions import celery
 
 logger = logging.getLogger(__name__)
+logger.info("[absensi.tasks] loaded from %s", __file__)
 
 
 @celery.task(name="absensi.healthcheck", bind=True)
 def healthcheck(self) -> Dict[str, Any]:
-    """
-    Task sederhana untuk cek hidup-mati worker.
-    """
     host = getattr(getattr(self, "request", None), "hostname", "unknown")
     logger.info("[absensi.healthcheck] OK from %s", host)
     return {"status": "ok", "host": host}
 
 
-@celery.task(name="absensi.process_checkin_task", bind=True)
-def process_checkin_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+@celery.task(name="absensi.process_checkin_task_v2", bind=True)
+def process_checkin_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Proses check-in secara asynchronous.
-    NOTE:
-      - Karena bind=True, argumen pertama WAJIB 'self'.
-      - 'payload' harus JSON-serializable (dict of str/number/bool/list/dict).
+    Proses check-in asynchronous.
+    bind=True -> argumen pertama 'self', argumen kedua 'payload' (JSON-serializable).
     """
     try:
-        logger.info("[process_checkin_task] start payload=%s", payload)
+        logger.info("[process_checkin_task_v2] start payload=%s", payload)
 
-        # TODO: Panggil service/logic milikmu di sini.
-        # Misal:
-        #   from app.services.absensi_service import handle_checkin
-        #   result = handle_checkin(payload)
-        # Untuk sementara, kita kembalikan ack minimal:
+        # TODO: panggil service/logic checkin asli milikmu di sini.
+        # from app.services.absensi_service import handle_checkin
+        # res = handle_checkin(payload)
+        # return {...}
+
         result = {
             "status": "ok",
             "message": "check-in diproses di background",
             "received_keys": list(payload.keys()),
         }
 
-        logger.info("[process_checkin_task] done user_id=%s", payload.get("user_id"))
+        logger.info("[process_checkin_task_v2] done user_id=%s", payload.get("user_id"))
         return result
 
     except Exception as e:
-        logger.exception("[process_checkin_task] error: %s", e)
+        logger.exception("[process_checkin_task_v2] error: %s", e)
         return {"status": "error", "message": str(e)}
 
 
-@celery.task(name="absensi.process_checkout_task", bind=True)
-def process_checkout_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Proses checkout secara asynchronous.
-    """
+@celery.task(name="absensi.process_checkout_task_v2", bind=True)
+def process_checkout_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        logger.info("[process_checkout_task] start payload=%s", payload)
+        logger.info("[process_checkout_task_v2] start payload=%s", payload)
 
         # TODO: panggil service checkout milikmu
         result = {
@@ -67,22 +59,18 @@ def process_checkout_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             "received_keys": list(payload.keys()),
         }
 
-        logger.info("[process_checkout_task] done user_id=%s", payload.get("user_id"))
+        logger.info("[process_checkout_task_v2] done user_id=%s", payload.get("user_id"))
         return result
 
     except Exception as e:
-        logger.exception("[process_checkout_task] error: %s", e)
+        logger.exception("[process_checkout_task_v2] error: %s", e)
         return {"status": "error", "message": str(e)}
 
 
-@celery.task(name="absensi.recalculate_user_day", bind=True)
-def recalculate_user_day(self, user_id: str, tanggal: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Recalculate rekap harian user (misal setelah koreksi manual).
-    'tanggal' opsional (format 'YYYY-MM-DD'); bila None, gunakan hari ini (di service).
-    """
+@celery.task(name="absensi.recalculate_user_day_v2", bind=True)
+def recalculate_user_day_v2(self, user_id: str, tanggal: Optional[str] = None) -> Dict[str, Any]:
     try:
-        logger.info("[recalculate_user_day] start user_id=%s tanggal=%s", user_id, tanggal)
+        logger.info("[recalculate_user_day_v2] start user_id=%s tanggal=%s", user_id, tanggal)
 
         # TODO: panggil service kalkulasi milikmu
         result = {
@@ -92,9 +80,15 @@ def recalculate_user_day(self, user_id: str, tanggal: Optional[str] = None) -> D
             "tanggal": tanggal,
         }
 
-        logger.info("[recalculate_user_day] done user_id=%s tanggal=%s", user_id, tanggal)
+        logger.info("[recalculate_user_day_v2] done user_id=%s tanggal=%s", user_id, tanggal)
         return result
 
     except Exception as e:
-        logger.exception("[recalculate_user_day] error: %s", e)
+        logger.exception("[recalculate_user_day_v2] error: %s", e)
         return {"status": "error", "message": str(e)}
+
+
+# --- Alias kompatibilitas (membantu jika ada import lama di tempat lain) ---
+process_checkin_task = process_checkin_task_v2
+process_checkout_task = process_checkout_task_v2
+recalculate_user_day = recalculate_user_day_v2

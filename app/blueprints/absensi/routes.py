@@ -29,10 +29,10 @@ from ...db.models import (
     Istirahat,
 )
 
-# >>> Tambahan: import Celery tasks untuk proses background
-from ...tasks.absensi_tasks import (
-    process_checkin_task,
-    process_checkout_task,
+# >>> Import Celery tasks (pakai v2 agar tidak bentrok definisi lama)
+from .tasks import (
+    process_checkin_task_v2,
+    process_checkout_task_v2,
 )
 
 absensi_bp = Blueprint("absensi", __name__)
@@ -180,7 +180,7 @@ def _agendas_payload_for_absensi(session, absensi_id: str, id_only: bool = False
 @absensi_bp.post("/checkin")
 def checkin():
     """
-    Refactor: verifikasi cepat + enqueue Celery task, balas 202.
+    Verifikasi cepat + enqueue Celery task, balas 202.
     Client dapat mem-poll /api/absensi/status untuk progres hasil.
     """
     user_id = (request.form.get("user_id") or "").strip()
@@ -210,7 +210,8 @@ def checkin():
 
         dist = None
         if loc:
-            dist = haversine_m(lng, lat, float(loc.longitude), float(loc.latitude))
+            # FIX: urutan haversine_m adalah (lat1, lon1, lat2, lon2)
+            dist = haversine_m(lat, lng, float(loc.latitude), float(loc.longitude))
             radius = _get_radius(loc)
             if dist > radius:
                 return error(f"Di luar geofence (jarak {int(dist)} m > radius {int(radius)} m)", 400)
@@ -233,7 +234,7 @@ def checkin():
         if already:
             return error("Check-in duplikat untuk tanggal ini (sudah check-in).", 409)
 
-    # Susun payload untuk background task (operasi I/O berat dilakukan di worker)
+    # Susun payload untuk background task
     payload = {
         "user_id": user_id,
         "today_local": today.isoformat(),
@@ -249,8 +250,8 @@ def checkin():
         "catatan_entries": catatan_entries # untuk Catatan di worker
     }
 
-    # Enqueue Celery task dan balas cepat
-    async_res = process_checkin_task.delay(payload)
+    # Enqueue Celery task (pakai v2)
+    async_res = process_checkin_task_v2.delay(payload)
     return (
         ok(
             accepted=True,
@@ -266,7 +267,7 @@ def checkin():
 @absensi_bp.post("/checkout")
 def checkout():
     """
-    Refactor: verifikasi cepat + enqueue Celery task, balas 202.
+    Verifikasi cepat + enqueue Celery task, balas 202.
     Worker akan mengisi jam_pulang, memperbarui catatan/agendas/recipients, dan kirim notifikasi.
     """
     user_id = (request.form.get("user_id") or "").strip()
@@ -305,7 +306,8 @@ def checkout():
 
         dist = None
         if loc:
-            dist = haversine_m(lng, lat, float(loc.longitude), float(loc.latitude))
+            # FIX: urutan haversine_m adalah (lat1, lon1, lat2, lon2)
+            dist = haversine_m(lat, lng, float(loc.latitude), float(loc.longitude))
             radius = _get_radius(loc)
             if dist > radius:
                 return error(f"Di luar geofence (jarak {int(dist)} m > radius {int(radius)} m)", 400)
@@ -336,7 +338,7 @@ def checkout():
         "catatan_entries": catatan_entries  # worker akan upsert urutannya
     }
 
-    async_res = process_checkout_task.delay(payload)
+    async_res = process_checkout_task_v2.delay(payload)
     return (
         ok(
             accepted=True,
