@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import json
 from typing import Optional
+import logging
+from insightface.app import FaceAnalysis
 
 from flask import Flask, current_app
 from flask_cors import CORS
@@ -24,6 +26,9 @@ celery: Celery = Celery(__name__)
 _face_engine: Optional[FaceAnalysis] = None
 _supabase: Optional[Client] = None
 _firebase_app: Optional[firebase_admin.App] = None
+face_engine = None
+log = logging.getLogger(__name__)
+
 
 
 # -------------------------
@@ -76,24 +81,31 @@ def init_celery(app: Flask) -> None:
 # -------------------------
 # Face engine (insightface)
 # -------------------------
-def init_face_engine(app: Flask) -> None:
-    """Eager init: dipanggil saat worker start. Aman dipanggil berulang."""
-    global _face_engine
-    if _face_engine is not None:
-        return
-
-    model_name = app.config.get("MODEL_NAME", "buffalo_l")
-    providers = app.config.get("ONNX_PROVIDERS") or ["CPUExecutionProvider"]
+def init_face_engine(app=None):
+    """
+    Inisialisasi global face_engine sekali saja.
+    Argumen 'app' opsional agar kompatibel dengan pemanggilan lama/baru.
+    """
+    global face_engine
+    if face_engine is not None:
+        return face_engine
 
     try:
-        engine = FaceAnalysis(name=model_name, providers=providers)
-        engine.prepare(ctx_id=0, det_size=(256, 256))
-        _face_engine = engine
-        app.logger.info(f"Face engine '{model_name}' initialized with providers={providers}")
-    except Exception as e:
-        _face_engine = None
-        app.logger.error(f"Gagal inisialisasi FaceAnalysis: {e}", exc_info=True)
+        # Bisa tarik config dari current_app jika ada
+        providers = ["CPUExecutionProvider"]
+        model_name = "buffalo_l"
+        det_size = (640, 640)
 
+        engine = FaceAnalysis(name=model_name, providers=providers)
+        engine.prepare(ctx_id=0, det_size=det_size)
+
+        face_engine = engine
+        log.info("InsightFace initialized: name=%s providers=%s", model_name, providers)
+        return face_engine
+    except Exception as e:
+        log.warning("InsightFace init failed: %s", e)
+        # Biarkan None; modul lain harus handle kondisi engine tidak siap
+        return None
 
 def get_face_engine() -> FaceAnalysis:
     """Lazy getter: kalau belum ada, coba init dari current_app."""
