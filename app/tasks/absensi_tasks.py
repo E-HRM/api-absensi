@@ -63,12 +63,19 @@ def process_checkin_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                 ShiftKerja.tanggal_selesai >= today,
             ).first()
 
+            # Variabel untuk Absensi Record
             status_kehadiran = AbsensiStatus.tepat
+            
+            # Variabel untuk Notifikasi (Default: Tepat Waktu)
+            status_absensi_str = "Tepat Waktu"
+            jam_masuk_str = now_dt.strftime("%H:%M")
+
             if jadwal_kerja and jadwal_kerja.polaKerja and jadwal_kerja.polaKerja.jam_mulai:
                 jam_masuk_seharusnya = jadwal_kerja.polaKerja.jam_mulai.time()
                 jam_checkin_aktual = now_dt.time()
                 if jam_checkin_aktual > jam_masuk_seharusnya:
                     status_kehadiran = AbsensiStatus.terlambat
+                    status_absensi_str = "Terlambat" # Update status string untuk notifikasi
 
             rec = Absensi(
                 id_user=user_id,
@@ -112,6 +119,21 @@ def process_checkin_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 
             s.commit()
             logger.info(f"[process_checkin_task_v2] SUCCESS for user_id={user_id}")
+            
+            # --- LOGIKA NOTIFIKASI CHECK-IN BERHASIL ---
+            dynamic_data = {
+                "jam_masuk": jam_masuk_str,
+                "status_absensi": status_absensi_str,
+                # Tambahkan 'nama_karyawan' jika User object diambil di awal task
+            }
+            
+            send_notification(
+                event_trigger="SUCCESS_CHECK_IN",
+                user_id=user_id,
+                dynamic_data=dynamic_data,
+                session=s,
+            )
+            # --- END LOGIKA NOTIFIKASI CHECK-IN ---
 
             return {"status": "ok", "message": "Check-in berhasil disimpan", "absensi_id": absensi_id}
 
@@ -183,6 +205,27 @@ def process_checkout_task_v2(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 
             s.commit()
             logger.info(f"[process_checkout_task_v2] SUCCESS for user_id={user_id}")
+            
+            # --- LOGIKA NOTIFIKASI CHECK-OUT BERHASIL (BARU) ---
+            # Hitung total jam kerja (sederhana: jam pulang - jam masuk)
+            total_duration = now_dt - rec.jam_masuk
+            # Format ke string sederhana (misal: '8 jam 30 menit')
+            total_jam_kerja = f"{total_duration.seconds // 3600} jam {total_duration.seconds % 3600 // 60} menit"
+            jam_pulang_str = now_dt.strftime("%H:%M")
+            
+            dynamic_data = {
+                "jam_pulang": jam_pulang_str,
+                "total_jam_kerja": total_jam_kerja,
+                # Tambahkan 'nama_karyawan' jika User object diambil di awal task
+            }
+            
+            send_notification(
+                event_trigger="SUCCESS_CHECK_OUT",
+                user_id=user_id,
+                dynamic_data=dynamic_data,
+                session=s,
+            )
+            # --- END LOGIKA NOTIFIKASI CHECK-OUT ---
             
             return {"status": "ok", "message": "Check-out berhasil disimpan", "absensi_id": absensi_id}
 

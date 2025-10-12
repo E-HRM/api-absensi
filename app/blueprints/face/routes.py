@@ -102,7 +102,7 @@ def enroll():
                 current_app.logger.warning(f"Gagal menyimpan device untuk user {user_id}: {e}")
 
         # Respon cepat; proses heavy dikerjakan Celery
-        return ok(message="Enroll task dijalankan di background", user_id=user_id, images=len(images_data))
+        return ok(message="Registrasi wajah berhasil di proses sistem", user_id=user_id, images=len(images_data))
 
     except Exception as e:
         current_app.logger.error(f"Kesalahan tidak terduga pada endpoint enroll: {e}", exc_info=True)
