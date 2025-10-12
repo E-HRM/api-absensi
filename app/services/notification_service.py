@@ -7,8 +7,14 @@ from datetime import datetime
 from typing import Any, Dict
 
 from firebase_admin import messaging
-from ..firebase import initialize_firebase
 from sqlalchemy.orm import Session
+
+# Coba impor initialize_firebase dari app.extensions, jika gagal, fallback ke app.firebase
+try:
+    from ..extensions import initialize_firebase
+except (ImportError, AttributeError):
+    from ..firebase import initialize_firebase
+
 
 from ..db.models import NotificationTemplate, Device, Notification
 
@@ -29,8 +35,11 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
     Kirim notifikasi push untuk pengguna tertentu.
     """
     try:
+        # Pastikan Firebase diinisialisasi sebelum digunakan
         initialize_firebase()
-    except Exception:
+    except Exception as e:
+        print(f"Peringatan: Gagal menginisialisasi Firebase saat mengirim notifikasi: {e}")
+        # Tetap lanjutkan untuk menyimpan notifikasi ke DB, tapi pengiriman push mungkin gagal
         pass
 
     template: NotificationTemplate | None = (
@@ -42,6 +51,7 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
         .one_or_none()
     )
     if not template:
+        print(f"Peringatan: Template notifikasi untuk event '{event_trigger}' tidak ditemukan atau tidak aktif.")
         return
 
     devices = (
@@ -55,12 +65,13 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
     )
     tokens = [d.fcm_token for d in devices if d.fcm_token]
     if not tokens:
+        print(f"Peringatan: Tidak ada token FCM yang valid untuk user '{user_id}'.")
         return
 
     title = _format_message(template.title_template, dynamic_data)
     body = _format_message(template.body_template, dynamic_data)
 
-    # Simpan notifikasi ke database (ini tidak berubah)
+    # Simpan notifikasi ke database untuk riwayat in-app
     notif = Notification(
         id_user=user_id,
         title=title,
@@ -71,31 +82,47 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
     session.add(notif)
     session.commit()
 
-    # --- PERUBAHAN UTAMA DI SINI ---
-    # Kita membuat payload yang strukturnya sama persis dengan backend Next.js.
-    # Hanya ada 'notification', 'android', dan 'apns' di level atas.
+    # --- PERBAIKAN UTAMA DI SINI ---
+    # Mengirim notifikasi sebagai 'data message' untuk memastikan pengiriman di background.
+    # Klien (Android/iOS) harus di-setup untuk menangani 'data message' ini dan
+    # membuat notifikasi lokal.
     message = messaging.MulticastMessage(
         tokens=tokens,
-        notification=messaging.Notification(
-            title=title,
-            body=body,
-        ),
+        data={
+            "title": title,
+            "body": body,
+            # Anda bisa menambahkan data lain di sini jika diperlukan oleh klien
+            # misalnya, untuk navigasi deep-link saat notifikasi dibuka.
+            "notification_id": str(notif.id_notification),
+            "event_trigger": event_trigger,
+        },
+        # Konfigurasi spesifik per platform untuk meningkatkan kemungkinan pengiriman
         android=messaging.AndroidConfig(
-            notification=messaging.AndroidNotification(sound="default")
+            priority="high",
         ),
         apns=messaging.APNSConfig(
             payload=messaging.APNSPayload(
-                aps=messaging.Aps(sound="default")
+                aps=messaging.Aps(
+                    content_available=True, # Membangunkan aplikasi iOS di background
+                )
             )
         ),
-        # Pastikan tidak ada payload 'data' di sini
     )
     # ---------------------------------
 
     try:
-        responses = messaging.send_each_for_multicast(message)
-        success_count = sum(1 for r in responses if r.success)
-        failure_count = len(responses) - success_count
-        print(f"Notifikasi dikirim: {success_count} sukses, {failure_count} gagal")
+        response = messaging.send_multicast(message)
+        print(f"Notifikasi dikirim untuk user '{user_id}': {response.success_count} sukses, {response.failure_count} gagal")
+        
+        # Opsi: Tangani token yang tidak valid/gagal
+        if response.failure_count > 0:
+            responses = response.responses
+            failed_tokens = []
+            for idx, resp in enumerate(responses):
+                if not resp.success:
+                    failed_tokens.append(tokens[idx])
+            print(f"Token yang gagal: {failed_tokens}")
+            # Di sini Anda bisa menambahkan logika untuk menghapus atau menonaktifkan token yang gagal dari DB
+
     except Exception as e:
-        print(f"Gagal mengirim notifikasi FCM: {e}")
+        print(f"Gagal total mengirim notifikasi FCM untuk user '{user_id}': {e}")
