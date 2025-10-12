@@ -1,3 +1,4 @@
+# scripts/seed_notifications.py
 """Seeding default notification templates."""
 
 from typing import Dict
@@ -15,125 +16,125 @@ from app.db.models import NotificationTemplate
 notification_templates = [
     # --- Notifikasi Wajah (BARU) ---
     {
-        'eventTrigger': 'FACE_REGISTRATION_SUCCESS',
+        'event_trigger': 'FACE_REGISTRATION_SUCCESS', # <-- DIUBAH
         'description': 'Konfirmasi saat karyawan berhasil mendaftarkan wajah',
-        'titleTemplate': '✅ Wajah Berhasil Terdaftar',
-        'bodyTemplate': 'Halo {nama_karyawan}, wajah Anda telah berhasil terdaftar pada sistem E-HRM. Anda kini dapat menggunakan fitur absensi wajah.',
+        'title_template': '✅ Wajah Berhasil Terdaftar', # <-- DIUBAH
+        'body_template': 'Halo {nama_karyawan}, wajah Anda telah berhasil terdaftar pada sistem E-HRM. Anda kini dapat menggunakan fitur absensi wajah.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}',
     },
 
     # --- Shift Kerja ---
     {
-        'eventTrigger': 'NEW_SHIFT_PUBLISHED',
+        'event_trigger': 'NEW_SHIFT_PUBLISHED', # <-- DIUBAH
         'description': 'Info saat jadwal shift baru diterbitkan untuk karyawan',
-        'titleTemplate': '📄 Jadwal Shift Baru Telah Terbit',
-        'bodyTemplate': 'Jadwal shift kerja Anda untuk periode {periode_mulai} - {periode_selesai} telah tersedia. Silakan periksa.',
+        'title_template': '📄 Jadwal Shift Baru Telah Terbit', # <-- DIUBAH
+        'body_template': 'Jadwal shift kerja Anda untuk periode {periode_mulai} - {periode_selesai} telah tersedia. Silakan periksa.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {periode_mulai}, {periode_selesai}',
     },
     {
-        'eventTrigger': 'SHIFT_UPDATED',
+        'event_trigger': 'SHIFT_UPDATED', # <-- DIUBAH
         'description': 'Info saat ada perubahan pada jadwal shift karyawan',
-        'titleTemplate': '🔄 Perubahan Jadwal Shift',
-        'bodyTemplate': 'Perhatian, shift Anda pada tanggal {tanggal_shift} diubah menjadi {nama_shift} ({jam_masuk} - {jam_pulang}).',
+        'title_template': '🔄 Perubahan Jadwal Shift', # <-- DIUBAH
+        'body_template': 'Perhatian, shift Anda pada tanggal {tanggal_shift} diubah menjadi {nama_shift} ({jam_masuk} - {jam_pulang}).', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {tanggal_shift}, {nama_shift}, {jam_masuk}, {jam_pulang}',
     },
     {
-        'eventTrigger': 'SHIFT_REMINDER_H1',
+        'event_trigger': 'SHIFT_REMINDER_H1', # <-- DIUBAH
         'description': 'Pengingat H-1 sebelum jadwal shift karyawan',
-        'titleTemplate': '📢 Pengingat Shift Besok',
-        'bodyTemplate': 'Jangan lupa, besok Anda masuk kerja pada shift {nama_shift} pukul {jam_masuk}.',
+        'title_template': '📢 Pengingat Shift Besok', # <-- DIUBAH
+        'body_template': 'Jangan lupa, besok Anda masuk kerja pada shift {nama_shift} pukul {jam_masuk}.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {nama_shift}, {jam_masuk}',
     },
 
     # --- Absensi (BARU) ---
     {
-        'eventTrigger': 'SUCCESS_CHECK_IN',
+        'event_trigger': 'SUCCESS_CHECK_IN', # <-- DIUBAH
         'description': 'Konfirmasi saat karyawan berhasil melakukan check-in, menyertakan status (tepat/terlambat)',
-        'titleTemplate': '✅ Check-in Berhasil',
-        'bodyTemplate': 'Absensi masuk Anda telah tercatat pada {jam_masuk} dengan status: {status_absensi}.',
+        'title_template': '✅ Check-in Berhasil', # <-- DIUBAH
+        'body_template': 'Absensi masuk Anda telah tercatat pada {jam_masuk} dengan status: {status_absensi}.', # <-- DIUBAH
         'placeholders': '{jam_masuk}, {status_absensi}, {nama_karyawan}',
     },
     {
-        'eventTrigger': 'SUCCESS_CHECK_OUT',
+        'event_trigger': 'SUCCESS_CHECK_OUT', # <-- DIUBAH
         'description': 'Konfirmasi saat karyawan berhasil melakukan check-out',
-        'titleTemplate': '👋 Sampai Jumpa!',
-        'bodyTemplate': 'Absensi pulang Anda telah tercatat pada {jam_pulang}. Total durasi kerja Anda: {total_jam_kerja}.',
+        'title_template': '👋 Sampai Jumpa!', # <-- DIUBAH
+        'body_template': 'Absensi pulang Anda telah tercatat pada {jam_pulang}. Total durasi kerja Anda: {total_jam_kerja}.', # <-- DIUBAH
         'placeholders': '{jam_pulang}, {total_jam_kerja}, {nama_karyawan}',
     },
 
     # --- Agenda Kerja ---
     {
-        'eventTrigger': 'NEW_AGENDA_ASSIGNED',
+        'event_trigger': 'NEW_AGENDA_ASSIGNED', # <-- DIUBAH
         'description': 'Notifikasi saat karyawan diberikan agenda kerja baru',
-        'titleTemplate': '✍️ Agenda Kerja Baru',
-        'bodyTemplate': 'Anda mendapatkan tugas baru: "{judul_agenda}". Batas waktu pengerjaan hingga {tanggal_deadline}.',
+        'title_template': '✍️ Agenda Kerja Baru', # <-- DIUBAH
+        'body_template': 'Anda mendapatkan tugas baru: "{judul_agenda}". Batas waktu pengerjaan hingga {tanggal_deadline}.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {judul_agenda}, {tanggal_deadline}, {pemberi_tugas}',
     },
     {
-        'eventTrigger': 'AGENDA_REMINDER_H1',
+        'event_trigger': 'AGENDA_REMINDER_H1', # <-- DIUBAH
         'description': 'Pengingat H-1 sebelum deadline agenda kerja',
-        'titleTemplate': '🔔 Pengingat Agenda Kerja',
-        'bodyTemplate': 'Jangan lupa, agenda "{judul_agenda}" akan jatuh tempo besok. Segera perbarui statusnya.',
+        'title_template': '🔔 Pengingat Agenda Kerja', # <-- DIUBAH
+        'body_template': 'Jangan lupa, agenda "{judul_agenda}" akan jatuh tempo besok. Segera perbarui statusnya.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {judul_agenda}',
     },
     {
-        'eventTrigger': 'AGENDA_OVERDUE',
+        'event_trigger': 'AGENDA_OVERDUE', # <-- DIUBAH
         'description': 'Notifikasi saat agenda kerja melewati batas waktu',
-        'titleTemplate': '⏰ Agenda Melewati Batas Waktu',
-        'bodyTemplate': 'Perhatian, agenda kerja "{judul_agenda}" telah melewati batas waktu pengerjaan.',
+        'title_template': '⏰ Agenda Melewati Batas Waktu', # <-- DIUBAH
+        'body_template': 'Perhatian, agenda kerja "{judul_agenda}" telah melewati batas waktu pengerjaan.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {judul_agenda}',
     },
     {
-        'eventTrigger': 'AGENDA_COMMENTED',
+        'event_trigger': 'AGENDA_COMMENTED', # <-- DIUBAH
         'description': 'Notifikasi saat atasan/rekan memberi komentar pada agenda',
-        'titleTemplate': '💬 Komentar Baru pada Agenda',
-        'bodyTemplate': '{nama_komentator} memberikan komentar pada agenda "{judul_agenda}". Silakan periksa detailnya.',
+        'title_template': '💬 Komentar Baru pada Agenda', # <-- DIUBAH
+        'body_template': '{nama_komentator} memberikan komentar pada agenda "{judul_agenda}". Silakan periksa detailnya.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {judul_agenda}, {nama_komentator}',
     },
 
     # --- Kunjungan Klien (Dipertahankan dari List Awal karena Unik) ---
     {
-        'eventTrigger': 'NEW_CLIENT_VISIT_ASSIGNED',
+        'event_trigger': 'NEW_CLIENT_VISIT_ASSIGNED', # <-- DIUBAH
         'description': 'Notifikasi saat karyawan mendapatkan jadwal kunjungan klien baru',
-        'titleTemplate': '🗓️ Kunjungan Klien Baru',
-        'bodyTemplate': 'Anda dijadwalkan untuk kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} {rentang_waktu_display}. Mohon persiapkan kebutuhan kunjungan.',
+        'title_template': '🗓️ Kunjungan Klien Baru', # <-- DIUBAH
+        'body_template': 'Anda dijadwalkan untuk kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} {rentang_waktu_display}. Mohon persiapkan kebutuhan kunjungan.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan}, {tanggal_kunjungan_display}, {rentang_waktu_display}',
     },
     {
-        'eventTrigger': 'CLIENT_VISIT_UPDATED',
+        'event_trigger': 'CLIENT_VISIT_UPDATED', # <-- DIUBAH
         'description': 'Notifikasi saat detail kunjungan klien diperbarui',
-        'titleTemplate': 'ℹ️ Pembaruan Kunjungan Klien',
-        'bodyTemplate': 'Detail kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} telah diperbarui. Status terbaru: {status_kunjungan_display}.',
+        'title_template': 'ℹ️ Pembaruan Kunjungan Klien', # <-- DIUBAH
+        'body_template': 'Detail kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} telah diperbarui. Status terbaru: {status_kunjungan_display}.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan_display}, {status_kunjungan_display}',
     },
     {
-        'eventTrigger': 'CLIENT_VISIT_REMINDER_END',
+        'event_trigger': 'CLIENT_VISIT_REMINDER_END', # <-- DIUBAH
         'description': 'Pengingat saat kunjungan klien mendekati waktu selesai',
-        'titleTemplate': '⏳ Kunjungan Klien Hampir Selesai',
-        'bodyTemplate': 'Kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} akan berakhir pada {waktu_selesai_display}. Mohon lengkapi laporan kunjungan.',
+        'title_template': '⏳ Kunjungan Klien Hampir Selesai', # <-- DIUBAH
+        'body_template': 'Kunjungan {kategori_kunjungan} pada {tanggal_kunjungan_display} akan berakhir pada {waktu_selesai_display}. Mohon lengkapi laporan kunjungan.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {kategori_kunjungan}, {tanggal_kunjungan_display}, {waktu_selesai_display}',
     },
 
     # --- Istirahat ---
     {
-        'eventTrigger': 'SUCCESS_START_BREAK',
+        'event_trigger': 'SUCCESS_START_BREAK', # <-- DIUBAH
         'description': 'Konfirmasi saat karyawan memulai istirahat',
-        'titleTemplate': '☕ Istirahat Dimulai',
-        'bodyTemplate': 'Anda memulai istirahat pada pukul {waktu_mulai_istirahat}. Selamat menikmati waktu istirahat Anda!',
+        'title_template': '☕ Istirahat Dimulai', # <-- DIUBAH
+        'body_template': 'Anda memulai istirahat pada pukul {waktu_mulai_istirahat}. Selamat menikmati waktu istirahat Anda!', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {waktu_mulai_istirahat}',
     },
     {
-        'eventTrigger': 'SUCCESS_END_BREAK',
+        'event_trigger': 'SUCCESS_END_BREAK', # <-- DIUBAH
         'description': 'Konfirmasi saat karyawan mengakhiri istirahat',
-        'titleTemplate': '✅ Istirahat Selesai',
-        'bodyTemplate': 'Anda telah mengakhiri istirahat pada pukul {waktu_selesai_istirahat}. Selamat melanjutkan pekerjaan!',
+        'title_template': '✅ Istirahat Selesai', # <-- DIUBAH
+        'body_template': 'Anda telah mengakhiri istirahat pada pukul {waktu_selesai_istirahat}. Selamat melanjutkan pekerjaan!', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {waktu_selesai_istirahat}',
     },
     {
-        'eventTrigger': 'BREAK_TIME_EXCEEDED',
+        'event_trigger': 'BREAK_TIME_EXCEEDED', # <-- DIUBAH
         'description': 'Notifikasi jika durasi istirahat melebihi batas',
-        'titleTemplate': '❗ Waktu Istirahat Berlebih',
-        'bodyTemplate': 'Perhatian, durasi istirahat Anda telah melebihi batas maksimal {maks_jam_istirahat} menit yang ditentukan.',
+        'title_template': '❗ Waktu Istirahat Berlebih', # <-- DIUBAH
+        'body_template': 'Perhatian, durasi istirahat Anda telah melebihi batas maksimal {maks_jam_istirahat} menit yang ditentukan.', # <-- DIUBAH
         'placeholders': '{nama_karyawan}, {maks_jam_istirahat}',
     },
 ]
@@ -253,16 +254,21 @@ def seed_notifications() -> None:
         ensure_notification_template_schema(session)
 
         for template_data in notification_templates:
+            # Baris ini sekarang tidak menyebabkan KeyError karena
+            # kita sudah mengubah kunci di `notification_templates` menjadi 'event_trigger'
             stmt = select(NotificationTemplate).where(
                 NotificationTemplate.event_trigger == template_data["event_trigger"]
             )
             exists = session.execute(stmt).scalar_one_or_none()
 
             if not exists:
+                # Karena semua kunci sekarang snake_case, `**template_data` akan bekerja
+                # dengan benar saat memanggil constructor model.
                 template = NotificationTemplate(**template_data)
                 session.add(template)
                 print(f"Template dibuat: {template_data['event_trigger']}")
             else:
+                # Semua lookup di sini juga menggunakan kunci snake_case
                 exists.description = template_data["description"]
                 exists.title_template = template_data["title_template"]
                 exists.body_template = template_data["body_template"]
