@@ -1,4 +1,4 @@
-# flask_api_face/app/services/notification_service.py
+# app/services/notification_service.py
 
 from __future__ import annotations
 
@@ -9,106 +9,113 @@ from typing import Any, Dict, List
 from firebase_admin import messaging
 from sqlalchemy.orm import Session
 
-# Coba impor initialize_firebase dari app.extensions, jika gagal, fallback ke app.firebase
+# Coba impor initialize_firebase dari extensions; jika tidak ada, pakai app/firebase.py
 try:
-    from ..extensions import initialize_firebase  # type: ignore
+    from ..extensions import initialize_firebase  # beberapa branch menamai begini
 except (ImportError, AttributeError):
-    from ..firebase import initialize_firebase  # type: ignore
+    from ..firebase import initialize_firebase  # fallback yang ada di repo kamu
 
 from ..db.models import NotificationTemplate, Device, Notification
 
 
+# ---------- Helpers ----------
+
 def _format_message(template: str, data: Dict[str, Any]) -> str:
-    """Ganti placeholder di dalam template dengan data."""
+    """Ganti placeholder {key} di template dengan data[key] tanpa meledak bila tidak ada."""
     if not template:
         return ""
     try:
         return template.format(**data)
     except Exception:
-        # Supaya tidak gagal total kalau ada placeholder yang belum tersedia
         return template
 
 
 def _send_multicast_compat(message: messaging.MulticastMessage, tokens: List[str]):
     """
     Kirim multicast dengan kompatibilitas lintas versi firebase_admin.
-    Mengembalikan objek beratribut:
-      - success_count
-      - failure_count
-      - responses (list dengan elemen yang punya .success: bool)
+
+    Return object dengan atribut:
+      - success_count: int
+      - failure_count: int
+      - responses: list objek yang punya .success: bool
     """
-    # 1) Versi baru: send_multicast (paling simpel)
+    # 1) Versi baru & paling umum
     if hasattr(messaging, "send_multicast"):
         return messaging.send_multicast(message)  # type: ignore[attr-defined]
 
-    # 2) Alternatif: send_each_for_multicast (ada di beberapa versi)
+    # 2) Ada di beberapa versi: kirim tiap item (namun tetap satu call)
     if hasattr(messaging, "send_each_for_multicast"):
         resp = messaging.send_each_for_multicast(message)  # type: ignore[attr-defined]
-        # Normalisasi struktur agar mirip dengan response send_multicast
-        success = sum(1 for r in resp.responses if r.success)
+        success = sum(1 for r in resp.responses if getattr(r, "success", False))
         failure = len(resp.responses) - success
-        # Kembalikan objek sederhana dengan atribut yang dibutuhkan
+
         class _Compat:
             def __init__(self, success_count, failure_count, responses):
                 self.success_count = success_count
                 self.failure_count = failure_count
                 self.responses = responses
+
         return _Compat(success, failure, resp.responses)
 
-    # 3) Versi lama: tidak ada multicast sama sekali -> gunakan send_all bila ada
+    # 3) Versi lama: konstruksi messages dan gunakan send_all jika ada
     common_kwargs = dict(
-        notification=message.notification,
         data=message.data,
         android=message.android,
         apns=message.apns,
         webpush=getattr(message, "webpush", None),
         fcm_options=getattr(message, "fcm_options", None),
+        notification=getattr(message, "notification", None),  # biasanya None krn kita pakai data-only
     )
     messages = [messaging.Message(token=t, **common_kwargs) for t in tokens]
 
     if hasattr(messaging, "send_all"):
         resp = messaging.send_all(messages)  # type: ignore[attr-defined]
-        # Struktur resp sudah punya .success_count, .failure_count, .responses
+
         class _Compat:
             def __init__(self, success_count, failure_count, responses):
                 self.success_count = success_count
                 self.failure_count = failure_count
                 self.responses = responses
+
         return _Compat(resp.success_count, resp.failure_count, resp.responses)
 
-    # 4) Fallback terakhir: kirim satu per satu
+    # 4) Fallback terakhir: kirim satu-per-satu
     responses = []
     success = 0
     for msg in messages:
         try:
             messaging.send(msg)
-            class _R:
-                success = True
+            class _R: success = True
             responses.append(_R())
             success += 1
         except Exception:
-            class _R:
-                success = False
+            class _R: success = False
             responses.append(_R())
+
     class _Compat:
         def __init__(self, success_count, failure_count, responses):
             self.success_count = success_count
             self.failure_count = failure_count
             self.responses = responses
+
     return _Compat(success, len(messages) - success, responses)
 
 
+# ---------- Public API ----------
+
 def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, Any], session: Session) -> None:
     """
-    Kirim notifikasi push untuk pengguna tertentu.
+    Kirim notifikasi push untuk user tertentu berdasarkan NotificationTemplate.event_trigger.
+    - Simpan record ke tabel notifications (tanpa kolom event_trigger, karena memang tidak ada).
+    - Kirim FCM sebagai 'data message' agar andal di background.
     """
+    # Pastikan Firebase Admin siap (tidak fatal kalau gagal)
     try:
-        # Pastikan Firebase diinisialisasi sebelum digunakan
         initialize_firebase()
     except Exception as e:
         print(f"Peringatan: Gagal menginisialisasi Firebase saat mengirim notifikasi: {e}")
-        # Tetap lanjutkan untuk menyimpan notifikasi ke DB, tapi pengiriman push mungkin gagal
 
+    # Ambil template aktif
     template: NotificationTemplate | None = (
         session.query(NotificationTemplate)
         .filter(
@@ -118,9 +125,10 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
         .one_or_none()
     )
     if not template:
-        print(f"Peringatan: Template notifikasi untuk event '{event_trigger}' tidak ditemukan atau tidak aktif.")
+        print(f"Peringatan: Template notifikasi untuk event '{event_trigger}' tidak ditemukan/ tidak aktif.")
         return
 
+    # Ambil token device aktif
     devices = (
         session.query(Device)
         .filter(
@@ -135,34 +143,38 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
         print(f"Peringatan: Tidak ada device/token FCM aktif untuk user '{user_id}'.")
         return
 
-    # Buat judul & body dengan placeholder yang digantikan
+    # Render judul & body dari template
     title = _format_message(template.title_template or "", dynamic_data)
     body = _format_message(template.body_template or "", dynamic_data)
 
-    # Simpan record notifikasi ke DB terlebih dahulu
+    # Simpan record notifikasi ke DB (TANPA event_trigger, karena kolom itu tidak ada di model Notification)
     notif = Notification(
         id_user=user_id,
-        event_trigger=event_trigger,
         title=title,
         body=body,
-        data_json=json.dumps(dynamic_data, default=str),
+        # Masukkan event_trigger & dynamic_data ke data_json supaya tetap terlacak di sisi server
+        data_json=json.dumps(
+            {"event_trigger": event_trigger, "meta": dynamic_data},
+            default=str
+        ),
+        # Optional: related_table/related_id bisa diisi oleh caller di masa depan
         created_at=datetime.utcnow(),
     )
     session.add(notif)
-    session.flush()  # supaya dapat id
+    session.flush()  # dapatkan id_notification untuk dipakai di payload
 
-    # Siapkan payload untuk FCM
-    notification = messaging.Notification(title=title, body=body)
-    data_payload = {
-        "event_trigger": event_trigger,
+    # Susun payload FCM sebagai DATA MESSAGE agar bisa diterima di background (Android/iOS)
+    data_payload: Dict[str, str] = {
+        "title": title,
+        "body": body,
         "notification_id": str(notif.id_notification),
-        # Tambahkan dynamic_data supaya aplikasi bisa menampilkan detail
+        "event_trigger": event_trigger,
+        # Klien bisa parse 'meta' untuk detail tambahan (status_absensi, jam, dll)
         "meta": json.dumps(dynamic_data, default=str),
     }
 
     multicast = messaging.MulticastMessage(
         tokens=tokens,
-        notification=notification,
         data=data_payload,
         android=messaging.AndroidConfig(priority="high"),
         apns=messaging.APNSConfig(
@@ -172,26 +184,25 @@ def send_notification(event_trigger: str, user_id: str, dynamic_data: Dict[str, 
         ),
     )
 
-    # Kirim dengan fungsi kompatibel lintas versi
+    # Kirim notifikasi (kompatibel lintas versi Admin SDK)
     try:
         response = _send_multicast_compat(multicast, tokens)
         print(
             f"Notifikasi dikirim untuk user '{user_id}': "
             f"{response.success_count} sukses, {response.failure_count} gagal"
         )
-        # Opsi: tangani token gagal
-        if response.failure_count:
+        if getattr(response, "failure_count", 0):
             failed_tokens = []
-            for idx, resp in enumerate(response.responses):
+            for idx, resp in enumerate(getattr(response, "responses", []) or []):
                 if not getattr(resp, "success", False):
                     failed_tokens.append(tokens[idx])
             if failed_tokens:
                 print(f"Token yang gagal: {failed_tokens}")
-                # TODO: Anda bisa menonaktifkan/menghapus token-token ini dari DB
+                # TODO: tandai token gagal (disable / hapus) di DB bila diperlukan
     except Exception as e:
         print(f"Gagal total mengirim notifikasi FCM untuk user '{user_id}': {e}")
 
-    # Commit perubahan DB (record notifikasi)
+    # Commit perubahan DB
     try:
         session.commit()
     except Exception as e:
