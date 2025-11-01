@@ -252,12 +252,18 @@ def checkin():
 
     # Enqueue Celery task (pakai v2)
     async_res = process_checkin_task_v2.delay(payload)
+    # Tambahkan jam_masuk dan mode awal ke respons untuk memberi tahu client bahwa
+    # user telah melakukan check-in. Meskipun data absensi disimpan secara
+    # asynchronous oleh worker, client dapat menggunakan nilai ini untuk
+    # segera memperbarui tampilan.
     return (
         ok(
             accepted=True,
             task_id=async_res.id,
             message="Check-in diterima, diproses di background",
             distanceMeters=(int(dist) if dist is not None else None),
+            jam_masuk=payload["now_local_iso"],
+            mode="checkout",
             **v,  # propagasi info verifikasi wajah (mis. score/distance)
         ),
         202,
@@ -339,12 +345,16 @@ def checkout():
     }
 
     async_res = process_checkout_task_v2.delay(payload)
+    # Tambahkan jam_pulang dan mode akhir ke respons checkout. Ini memungkinkan client
+    # segera memperbarui tampilan ke status selesai sebelum worker selesai.
     return (
         ok(
             accepted=True,
             task_id=async_res.id,
             message="Check-out diterima, diproses di background",
             distanceMeters=(int(dist) if dist is not None else None),
+            jam_pulang=payload["now_local_iso"],
+            mode="done",
             **v,
         ),
         202,
