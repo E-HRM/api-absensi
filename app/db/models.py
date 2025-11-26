@@ -8,7 +8,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from . import Base
 
-# ===== Enums (Diperbarui) =====
+# ===== Enums =====
 
 class Role(PyEnum):
     KARYAWAN = "KARYAWAN"
@@ -19,64 +19,52 @@ class Role(PyEnum):
     SUBADMIN = "SUBADMIN"
     SUPERVISI = "SUPERVISI"
 
-
 class AtasanRole(PyEnum):
     HR = "HR"
     OPERASIONAL = "OPERASIONAL"
     DIREKTUR = "DIREKTUR"
-    SUPERADMIN = "SUPERADMIN" # Ditambahkan
-
+    SUPERADMIN = "SUPERADMIN"
 
 class CutiType(PyEnum):
     cuti = "cuti"
     sakit = "sakit"
     izin = "izin"
 
-
 class ApproveStatus(PyEnum):
     disetujui = "disetujui"
     ditolak = "ditolak"
     pending = "pending"
-    menunggu = "menunggu"
-
 
 class WorkStatus(PyEnum):
     berjalan = "berjalan"
     berhenti = "berhenti"
     selesai = "selesai"
 
-# BARU
 class StatusKerja(PyEnum):
     AKTIF = "AKTIF"
     TIDAK_AKTIF = "TIDAK_AKTIF"
     CUTI = "CUTI"
 
-# BARU
 class JenisKelamin(PyEnum):
     LAKI_LAKI = "LAKI_LAKI"
     PEREMPUAN = "PEREMPUAN"
 
-# DIHAPUS (Tidak ada lagi di Prisma)
-# class Impact(PyEnum):
-#     PERSONAL = "PERSONAL"
-#     COMPANY = "COMPANY"
-    
+class StatusCuti(PyEnum):
+    aktif = "aktif"
+    nonaktif = "nonaktif"
 
 class ShiftStatus(PyEnum):
     KERJA = "KERJA"
     LIBUR = "LIBUR"
 
-
 class AbsensiStatus(PyEnum):
     tepat = "tepat"
     terlambat = "terlambat"
-
 
 class LemburStatus(PyEnum):
     pending = "pending"
     disetujui = "disetujui"
     ditolak = "ditolak"
-
 
 class Bulan(PyEnum):
     JANUARI = "JANUARI"
@@ -92,25 +80,21 @@ class Bulan(PyEnum):
     NOVEMBER = "NOVEMBER"
     DESEMBER = "DESEMBER"
 
-
 class ReportStatus(PyEnum):
     terkirim = "terkirim"
     disetujui = "disetujui"
     ditolak = "ditolak"
 
-
 class AgendaStatus(PyEnum):
-    teragenda = "teragenda" # Ditambahkan
+    teragenda = "teragenda"
     diproses = "diproses"
     ditunda = "ditunda"
     selesai = "selesai"
 
-# BARU
 class StatusKunjungan(PyEnum):
     diproses = "diproses"
     berlangsung = "berlangsung"
     selesai = "selesai"
-
 
 class NotificationStatus(PyEnum):
     unread = "unread"
@@ -148,6 +132,7 @@ class Broadcast(Base):
     deleted_at = Column(DateTime)
 
     recipients = relationship("BroadcastRecipient", back_populates="broadcast", cascade="all, delete-orphan")
+    attachments = relationship("BroadcastAttachment", back_populates="broadcast", cascade="all, delete-orphan")
 
 
 class BroadcastRecipient(Base):
@@ -169,32 +154,20 @@ class BroadcastRecipient(Base):
         Index("idx_br_id_user", "id_user"),
     )
 
-# ----- DIHAPUS: Digantikan oleh PengajuanCuti -----
-# class Cuti(Base):
-#     ...
 
-# ----- DIHAPUS: Digantikan oleh ApprovalPengajuanCuti -----
-# class CutiApproval(Base):
-#     ...
-
-# ----- DIPERBARUI: Ditambahkan relasi id_user -----
-class CutiKonfigurasi(Base):
-    __tablename__ = "cuti_konfigurasi"
-    id_cuti_konfigurasi = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
-    bulan = Column(Enum(Bulan), nullable=False)
-    kouta_cuti = Column(Integer, nullable=False)
+class BroadcastAttachment(Base):
+    __tablename__ = "broadcast_attachments"
+    id_broadcast_attachment = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id_broadcast = Column(CHAR(36), ForeignKey("broadcasts.id_broadcasts", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
+    lampiran_url = Column(Text, nullable=False)
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     deleted_at = Column(DateTime)
-    
-    user = relationship("User", back_populates="konfigurasi_cuti")
 
-    __table_args__ = (
-        UniqueConstraint("id_user", "bulan", name="uq_cuti_konfigurasi_user_bulan"),
-        Index("idx_ck_id_user", "id_user"),
-    )
+    broadcast = relationship("Broadcast", back_populates="attachments")
+
+    __table_args__ = (Index("idx_ba_id_broadcast", "id_broadcast"),)
 
 
 class PolaKerja(Base):
@@ -218,9 +191,9 @@ class ShiftKerja(Base):
     __tablename__ = "shift_kerja"
     id_shift_kerja = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
-    tanggal_mulai = Column(Date)
-    tanggal_selesai = Column(Date)
-    hari_kerja = Column(String, nullable=False)
+    tanggal_mulai = Column(Date, nullable=False)
+    tanggal_selesai = Column(Date, nullable=False)
+    hari_kerja = Column(String(255), nullable=False) # String in Prisma
     status = Column(Enum(ShiftStatus), nullable=False)
     id_pola_kerja = Column(CHAR(36), ForeignKey("pola_kerja.id_pola_kerja", ondelete="RESTRICT", onupdate="CASCADE"))
 
@@ -232,6 +205,7 @@ class ShiftKerja(Base):
     polaKerja = relationship("PolaKerja", back_populates="shifts")
 
     __table_args__ = (
+        UniqueConstraint("id_user", "tanggal_mulai", name="uniq_shift_per_user_per_date"),
         Index("idx_sk_id_user_tanggal_mulai", "id_user", "tanggal_mulai"),
         Index("idx_sk_id_pola_kerja", "id_pola_kerja"),
     )
@@ -260,7 +234,8 @@ class AgendaKerja(Base):
     end_date = Column(DateTime)
     duration_seconds = Column(Integer)
     status = Column(Enum(AgendaStatus), nullable=False)
-    kebutuhan_agenda = Column(String(255)) # BARU
+    kebutuhan_agenda = Column(String(255))
+    created_by_snapshot = Column(String(255))
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -276,7 +251,7 @@ class AgendaKerja(Base):
         Index("idx_ak_id_agenda", "id_agenda"),
     )
 
-# BARU
+
 class KategoriKunjungan(Base):
     __tablename__ = "kategori_kunjungan"
     id_kategori_kunjungan = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -288,7 +263,7 @@ class KategoriKunjungan(Base):
     
     kunjungan = relationship("Kunjungan", back_populates="kategori")
 
-# DIPERBARUI
+
 class Kunjungan(Base):
     __tablename__ = "kunjungan"
     id_kunjungan = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -308,6 +283,7 @@ class Kunjungan(Base):
     status_kunjungan = Column(Enum(StatusKunjungan), nullable=False, default=StatusKunjungan.diproses)
     duration = Column(Integer)
     hand_over = Column(Text)
+    created_by_snapshot = Column(String(255))
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -328,7 +304,7 @@ class KunjunganReportRecipient(Base):
     id_kunjungan_report_recipient = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     id_kunjungan = Column(CHAR(36), ForeignKey("kunjungan.id_kunjungan", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
-    recipient_nama_snapshot = Column(String(255), nullable=False) # BARU
+    recipient_nama_snapshot = Column(String(255), nullable=False)
     recipient_role_snapshot = Column(Enum(AtasanRole))
     catatan = Column(Text)
     status = Column(Enum(ReportStatus), nullable=False, default=ReportStatus.terkirim)
@@ -357,6 +333,7 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     kontak = Column(String(32))
+    nama_kontak_darurat = Column(String(32))
     kontak_darurat = Column(String(32))
     password_updated_at = Column(DateTime)
     agama = Column(String(32))
@@ -386,10 +363,11 @@ class User(Base):
     divisi = Column(String(100))
     id_jabatan = Column(CHAR(36), ForeignKey("jabatan.id_jabatan", ondelete="SET NULL", onupdate="CASCADE"))
     status_kerja = Column(Enum(StatusKerja))
+    status_cuti = Column(Enum(StatusCuti), default=StatusCuti.aktif)
     tanggal_mulai_bekerja = Column(Date)
     nomor_rekening = Column(String(50))
     jenis_bank = Column(String(50))
-    catatan_delete = Column(Text) # BARU
+    catatan_delete = Column(Text)
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -397,43 +375,42 @@ class User(Base):
 
     departement = relationship("Departement", back_populates="users", foreign_keys=[id_departement])
     kantor = relationship("Location", back_populates="users")
-    jabatan = relationship("Jabatan", back_populates="users")
-
+    jabatan = relationship("Jabatan", back_populates="users", foreign_keys=[id_jabatan])
+    
     faces = relationship("Face", back_populates="user", cascade="all, delete-orphan")
     agendas = relationship("AgendaKerja", back_populates="user", foreign_keys="AgendaKerja.id_user")
-    # cuti = relationship("Cuti", back_populates="user", foreign_keys="Cuti.id_user") # DIHAPUS
     shifts = relationship("ShiftKerja", back_populates="user", foreign_keys="ShiftKerja.id_user")
     story_planners = relationship("StoryPlanner", back_populates="user", foreign_keys="StoryPlanner.id_user")
     absensi = relationship("Absensi", back_populates="user", foreign_keys="Absensi.id_user")
     lembur = relationship("Lembur", back_populates="user", foreign_keys="Lembur.id_user")
-    # shift_piket = relationship("ShiftPiket", back_populates="user", foreign_keys="ShiftPiket.id_user") # DIHAPUS
     shift_storyPlanner = relationship("ShiftStoryPlanner", back_populates="user", foreign_keys="ShiftStoryPlanner.id_user")
     broadcast_rcv = relationship("BroadcastRecipient", back_populates="user", foreign_keys="BroadcastRecipient.id_user")
     devices = relationship("Device", back_populates="user", cascade="all, delete-orphan")
-    # cuti_approvals = relationship("CutiApproval", back_populates="approver", foreign_keys="CutiApproval.approver_user_id") # DIHAPUS
+    
     lembur_approvals = relationship("LemburApproval", back_populates="approver", foreign_keys="LemburApproval.approver_user_id")
     absensi_reports_received = relationship("AbsensiReportRecipient", back_populates="recipient", foreign_keys="AbsensiReportRecipient.id_user")
     kunjungan = relationship("Kunjungan", back_populates="user", foreign_keys="Kunjungan.id_user")
     kunjungan_reports_received = relationship("KunjunganReportRecipient", back_populates="recipient", foreign_keys="KunjunganReportRecipient.id_user")
     notifications = relationship("Notification", back_populates="recipient", cascade="all, delete-orphan")
     istirahat = relationship("Istirahat", back_populates="user", cascade="all, delete-orphan")
-
+    
+    # Supervisor relation
     supervised_department = relationship("Departement", uselist=False, back_populates="supervisor", foreign_keys="Departement.id_supervisor")
 
-    # ===== RELASI BARU UNTUK APPROVAL =====
+    # Approvals (User as Approver)
     approvals_pengajuan_cuti = relationship("ApprovalPengajuanCuti", back_populates="approver", foreign_keys="ApprovalPengajuanCuti.approver_user_id")
     approvals_izin_sakit = relationship("ApprovalIzinSakit", back_populates="approver", foreign_keys="ApprovalIzinSakit.approver_user_id")
     approvals_izin_jam = relationship("ApprovalPengajuanIzinJam", back_populates="approver", foreign_keys="ApprovalPengajuanIzinJam.approver_user_id")
     approvals_tukar_hari = relationship("ApprovalIzinTukarHari", back_populates="approver", foreign_keys="ApprovalIzinTukarHari.approver_user_id")
 
-    # ===== RELASI BARU UNTUK PENGAJUAN =====
+    # Pengajuan (User as Applicant)
     pengajuan_cuti = relationship("PengajuanCuti", back_populates="user", foreign_keys="PengajuanCuti.id_user")
     pengajuan_izin_sakit = relationship("PengajuanIzinSakit", back_populates="user", foreign_keys="PengajuanIzinSakit.id_user")
     pengajuan_izin_jam = relationship("PengajuanIzinJam", back_populates="user", foreign_keys="PengajuanIzinJam.id_user")
     izin_tukar_hari = relationship("IzinTukarHari", back_populates="user", foreign_keys="IzinTukarHari.id_user")
     konfigurasi_cuti = relationship("CutiKonfigurasi", back_populates="user", foreign_keys="CutiKonfigurasi.id_user")
 
-    # ===== BARU: RELASI UNTUK HANDOVER TAG =====
+    # Handover Tagging (User as Tagged)
     tagged_in_cuti = relationship("HandoverCuti", back_populates="user", foreign_keys="HandoverCuti.id_user_tagged")
     tagged_in_sakit = relationship("HandoverIzinSakit", back_populates="user", foreign_keys="HandoverIzinSakit.id_user_tagged")
     tagged_in_izin_jam = relationship("HandoverIzinJam", back_populates="user", foreign_keys="HandoverIzinJam.id_user_tagged")
@@ -450,25 +427,24 @@ class Departement(Base):
     __tablename__ = "departement"
     id_departement = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     nama_departement = Column(String(256), nullable=False)
-    id_supervisor = Column(CHAR(36), ForeignKey("user.id_user", ondelete="SET NULL", onupdate="CASCADE"), unique=True) # BARU
+    id_supervisor = Column(CHAR(36), ForeignKey("user.id_user", ondelete="SET NULL", onupdate="CASCADE"), unique=True)
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     deleted_at = Column(DateTime)
 
-    users = relationship("User", back_populates="departement", foreign_keys="[User.id_departement]")
+    users = relationship("User", back_populates="departement", foreign_keys=[User.id_departement])
     jabatan = relationship("Jabatan", back_populates="departement")
     supervisor = relationship("User", back_populates="supervised_department", foreign_keys=[id_supervisor])
     StoryPlanner = relationship("StoryPlanner", back_populates="departement")
 
 
-# BARU
 class Jabatan(Base):
     __tablename__ = "jabatan"
     id_jabatan = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     nama_jabatan = Column(String(256), nullable=False)
     id_departement = Column(CHAR(36), ForeignKey("departement.id_departement", ondelete="SET NULL", onupdate="CASCADE"))
-    id_induk_jabatan = Column(CHAR(36), ForeignKey("jabatan.id_jabatan", ondelete="SET NULL")) # NoAction in SQL -> default onupdate
+    id_induk_jabatan = Column(CHAR(36), ForeignKey("jabatan.id_jabatan", ondelete="SET NULL")) # NoAction in SQL handled by not adding ondelete CASCADE
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -484,7 +460,7 @@ class Jabatan(Base):
         Index("idx_j_id_induk_jabatan", "id_induk_jabatan"),
     )
 
-# BARU
+
 class Istirahat(Base):
     __tablename__ = "istirahat"
     id_istirahat = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -558,7 +534,6 @@ class Device(Base):
     app_version = Column(String(50))
     device_identifier = Column(String(191))
     last_seen = Column(DateTime)
-    # ----- PENAMBAHAN DARI PRISMA -----
     fcm_token = Column(String(1024))
     fcm_token_updated_at = Column(DateTime)
     push_enabled = Column(Boolean, nullable=False, default=True)
@@ -621,7 +596,7 @@ class AbsensiReportRecipient(Base):
     id_absensi_report_recipient = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     id_absensi = Column(CHAR(36), ForeignKey("Absensi.id_absensi", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
-    recipient_nama_snapshot = Column(String(255), nullable=False) # BARU
+    recipient_nama_snapshot = Column(String(255), nullable=False)
     recipient_role_snapshot = Column(Enum(AtasanRole))
     catatan = Column(Text)
     status = Column(Enum(ReportStatus), nullable=False, default=ReportStatus.terkirim)
@@ -688,9 +663,8 @@ class Notification(Base):
 
 class NotificationTemplate(Base):
     __tablename__ = "notification_templates"
-
     id = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    event_trigger = Column(String(64), unique=True, nullable=False)
+    event_trigger = Column(String(191), unique=True, nullable=False)
     description = Column(String(255), nullable=False)
     title_template = Column(String(255), nullable=False)
     body_template = Column(Text, nullable=False)
@@ -747,9 +721,6 @@ class LemburApproval(Base):
         Index("idx_la_approver_user_id", "approver_user_id"),
     )
 
-# ----- DIHAPUS: Tidak ada di Prisma -----
-# class JadwalPiket(Base):
-#    ...
 
 class JadwalStoryPlanner(Base):
     __tablename__ = "jadwal_story_planer"
@@ -764,16 +735,13 @@ class JadwalStoryPlanner(Base):
 
     shifts = relationship("ShiftStoryPlanner", back_populates="jadwal", cascade="all, delete-orphan")
 
-# ----- DIHAPUS: Tidak ada di Prisma -----
-# class ShiftPiket(Base):
-#    ...
 
 class ShiftStoryPlanner(Base):
     __tablename__ = "shift_story_planer"
     id_shift_story_planner = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     id_jadwal_story_planner = Column(CHAR(36), ForeignKey("jadwal_story_planer.id_jadwal_story_planner", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
-    hari_story_planner = Column(String, nullable=False)
+    hari_story_planner = Column(String(255), nullable=False)
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -788,9 +756,25 @@ class ShiftStoryPlanner(Base):
     )
 
 
-# ======================================================
-# ===== MODEL BARU DARI PRISMA (PENGAJUAN & IZIN) =====
-# ======================================================
+class CutiKonfigurasi(Base):
+    __tablename__ = "cuti_konfigurasi"
+    id_cuti_konfigurasi = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
+    bulan = Column(Enum(Bulan), nullable=False)
+    kouta_cuti = Column(Integer, nullable=False)
+    cuti_tabung = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime)
+    
+    user = relationship("User", back_populates="konfigurasi_cuti")
+
+    __table_args__ = (
+        UniqueConstraint("id_user", "bulan", name="uq_cuti_konfigurasi_user_bulan"),
+        Index("idx_ck_id_user", "id_user"),
+    )
+
 
 class KategoriSakit(Base):
     __tablename__ = "kategori_sakit"
@@ -804,10 +788,23 @@ class KategoriSakit(Base):
     sakit = relationship("PengajuanIzinSakit", back_populates="kategori")
 
 
+class KategoriIzinJam(Base):
+    __tablename__ = "kategori_izin_jam"
+    id_kategori_izin_jam = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    nama_kategori = Column(String(255), nullable=False)
+    
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime)
+    
+    pengajuan_izin_jam = relationship("PengajuanIzinJam", back_populates="kategori")
+
+
 class KategoriCuti(Base):
     __tablename__ = "kategori_cuti"
     id_kategori_cuti = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     nama_kategori = Column(String(255), nullable=False)
+    pengurangan_kouta = Column(Boolean, default=True, nullable=False)
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -816,18 +813,20 @@ class KategoriCuti(Base):
     pengajuan_cuti = relationship("PengajuanCuti", back_populates="kategori_cuti")
 
 
+# ===== Pengajuan Cuti =====
+
 class PengajuanCuti(Base):
     __tablename__ = "pengajuan_cuti"
     id_pengajuan_cuti = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
     id_kategori_cuti = Column(CHAR(36), ForeignKey("kategori_cuti.id_kategori_cuti", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
     keperluan = Column(Text)
-    tanggal_mulai = Column(Date, nullable=False)
     tanggal_masuk_kerja = Column(Date, nullable=False)
     handover = Column(Text)
     status = Column(Enum(ApproveStatus), nullable=False, default=ApproveStatus.pending)
     current_level = Column(Integer)
     jenis_pengajuan = Column(String(32), nullable=False)
+    lampiran_cuti_url = Column(Text)
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -837,10 +836,27 @@ class PengajuanCuti(Base):
     kategori_cuti = relationship("KategoriCuti", back_populates="pengajuan_cuti")
     approvals = relationship("ApprovalPengajuanCuti", back_populates="pengajuan_cuti", cascade="all, delete-orphan")
     handover_users = relationship("HandoverCuti", back_populates="pengajuan_cuti", cascade="all, delete-orphan")
+    tanggal_list = relationship("PengajuanCutiTanggal", back_populates="pengajuan_cuti", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_pc_id_user", "id_user"),
         Index("idx_pc_id_kategori_cuti", "id_kategori_cuti"),
+    )
+
+
+class PengajuanCutiTanggal(Base):
+    __tablename__ = "pengajuan_cuti_tanggal"
+    id_pengajuan_cuti_tanggal = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id_pengajuan_cuti = Column(CHAR(36), ForeignKey("pengajuan_cuti.id_pengajuan_cuti", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
+    tanggal_cuti = Column(Date, nullable=False)
+
+    created_at = Column(DateTime, default=func.now())
+
+    pengajuan_cuti = relationship("PengajuanCuti", back_populates="tanggal_list")
+
+    __table_args__ = (
+        UniqueConstraint("id_pengajuan_cuti", "tanggal_cuti", name="uniq_tanggal_per_pengajuan"),
+        Index("idx_pct_pengajuan_tanggal", "id_pengajuan_cuti", "tanggal_cuti"),
     )
 
 
@@ -868,6 +884,8 @@ class ApprovalPengajuanCuti(Base):
     )
 
 
+# ===== Izin Sakit =====
+
 class PengajuanIzinSakit(Base):
     __tablename__ = "pengajuan_izin_sakit"
     id_pengajuan_izin_sakit = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -878,6 +896,7 @@ class PengajuanIzinSakit(Base):
     status = Column(Enum(ApproveStatus), nullable=False, default=ApproveStatus.pending)
     current_level = Column(Integer)
     jenis_pengajuan = Column(String(32), nullable=False)
+    tanggal_pengajuan = Column(Date)
 
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
@@ -918,14 +937,19 @@ class ApprovalIzinSakit(Base):
     )
 
 
+# ===== Izin Jam =====
+
 class PengajuanIzinJam(Base):
     __tablename__ = "pengajuan_izin_jam"
     id_pengajuan_izin_jam = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
+    id_kategori_izin_jam = Column(CHAR(36), ForeignKey("kategori_izin_jam.id_kategori_izin_jam", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
     tanggal_izin = Column(Date, nullable=False)
     jam_mulai = Column(DateTime, nullable=False)
     jam_selesai = Column(DateTime, nullable=False)
-    kategori = Column(String(255), nullable=False)
+    tanggal_pengganti = Column(Date)
+    jam_mulai_pengganti = Column(DateTime)
+    jam_selesai_pengganti = Column(DateTime)
     keperluan = Column(Text)
     handover = Column(Text)
     lampiran_izin_jam_url = Column(Text)
@@ -938,11 +962,13 @@ class PengajuanIzinJam(Base):
     deleted_at = Column(DateTime)
 
     user = relationship("User", back_populates="pengajuan_izin_jam")
+    kategori = relationship("KategoriIzinJam", back_populates="pengajuan_izin_jam")
     approvals = relationship("ApprovalPengajuanIzinJam", back_populates="pengajuan_izin_jam", cascade="all, delete-orphan")
     handover_users = relationship("HandoverIzinJam", back_populates="pengajuan_izin_jam", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_pij_id_user_tanggal_izin", "id_user", "tanggal_izin"),
+        Index("idx_pij_id_kategori_izin_jam", "id_kategori_izin_jam"),
     )
 
 
@@ -970,15 +996,16 @@ class ApprovalPengajuanIzinJam(Base):
     )
 
 
+# ===== Izin Tukar Hari =====
+
 class IzinTukarHari(Base):
     __tablename__ = "izin_tukar_hari"
     id_izin_tukar_hari = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     id_user = Column(CHAR(36), ForeignKey("user.id_user", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False)
-    hari_izin = Column(Date, nullable=False)
-    hari_pengganti = Column(Date, nullable=False)
     kategori = Column(String(255), nullable=False)
     keperluan = Column(Text)
     handover = Column(Text)
+    lampiran_izin_tukar_hari_url = Column(Text)
     status = Column(Enum(ApproveStatus), nullable=False, default=ApproveStatus.pending)
     current_level = Column(Integer)
     jenis_pengajuan = Column(String(32), nullable=False)
@@ -990,9 +1017,29 @@ class IzinTukarHari(Base):
     user = relationship("User", back_populates="izin_tukar_hari")
     approvals = relationship("ApprovalIzinTukarHari", back_populates="izin_tukar_hari", cascade="all, delete-orphan")
     handover_users = relationship("HandoverTukarHari", back_populates="izin_tukar_hari", cascade="all, delete-orphan")
+    pairs = relationship("IzinTukarHariPair", back_populates="izin_tukar_hari", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index("idx_ith_id_user_hari_izin", "id_user", "hari_izin"),
+        Index("idx_ith_id_user_created", "id_user", "created_at"),
+    )
+
+
+class IzinTukarHariPair(Base):
+    __tablename__ = "izin_tukar_hari_pair"
+    id_izin_tukar_hari_pair = Column(CHAR(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id_izin_tukar_hari = Column(CHAR(36), ForeignKey("izin_tukar_hari.id_izin_tukar_hari", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
+    hari_izin = Column(Date, nullable=False)
+    hari_pengganti = Column(Date, nullable=False)
+    catatan_pair = Column(Text)
+
+    created_at = Column(DateTime, default=func.now())
+
+    izin_tukar_hari = relationship("IzinTukarHari", back_populates="pairs")
+
+    __table_args__ = (
+        UniqueConstraint("id_izin_tukar_hari", "hari_izin", "hari_pengganti", name="uniq_pair_per_pengajuan"),
+        Index("idx_ithp_izin_pair", "id_izin_tukar_hari", "hari_izin"),
+        Index("idx_ithp_pengganti_pair", "id_izin_tukar_hari", "hari_pengganti"),
     )
 
 
@@ -1019,6 +1066,8 @@ class ApprovalIzinTukarHari(Base):
         Index("idx_aith_approver_user_id", "approver_user_id"),
     )
 
+
+# ===== Handover Tags =====
 
 class HandoverCuti(Base):
     __tablename__ = "handover_cuti"
